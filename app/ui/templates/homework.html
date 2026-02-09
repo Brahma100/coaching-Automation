@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Homework Manager</h2>
+<form method="post" action="/ui/homework/create">
+  <input name="title" placeholder="Title" required />
+  <input name="description" placeholder="Description" />
+  <input name="due_date" type="date" required />
+  <input name="attachment_path" placeholder="Attachment path" />
+  <button type="submit">Create Homework</button>
+</form>
+<ul>
+{% for row in rows %}
+  <li>{{ row.title }} | Due: {{ row.due_date }} | File: {{ row.attachment_path }}</li>
+{% else %}
+  <li>No homework yet.</li>
+{% endfor %}
+</ul>
+{% endblock %}

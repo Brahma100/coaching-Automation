@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Teacher Dashboard</h2>
+<section>
+  <h3>Low Attendance</h3>
+  <ul>
+    {% for item in insights.low_attendance %}
+      <li>{{ item.student_name }}: {{ item.attendance_ratio }}</li>
+    {% else %}
+      <li>No low attendance insights.</li>
+    {% endfor %}
+  </ul>
+</section>
+<section>
+  <h3>Unpaid Fees</h3>
+  <ul>
+    {% for item in insights.unpaid_fees %}
+      <li>Student #{{ item.student_id }} | Pending: {{ item.pending_amount }} | Due: {{ item.due_date }}</li>
+    {% else %}
+      <li>No unpaid fees.</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

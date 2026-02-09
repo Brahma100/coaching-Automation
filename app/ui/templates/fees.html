@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Fee Dashboard</h2>
+<section>
+  <h3>Due</h3>
+  <ul>
+    {% for r in data.due %}
+      <li>#{{ r.id }} Student {{ r.student_id }} Amount {{ r.amount }} Due {{ r.due_date }}</li>
+    {% else %}<li>No due items.</li>{% endfor %}
+  </ul>
+</section>
+<section>
+  <h3>Overdue</h3>
+  <ul>
+    {% for r in data.overdue %}
+      <li>#{{ r.id }} Student {{ r.student_id }} Pending {{ r.amount - r.paid_amount }} <a href="{{ r.upi_link }}">UPI Link</a></li>
+    {% else %}<li>No overdue items.</li>{% endfor %}
+  </ul>
+</section>
+<section>
+  <h3>Paid</h3>
+  <ul>
+    {% for r in data.paid %}
+      <li>#{{ r.id }} Student {{ r.student_id }} Paid {{ r.paid_amount }}</li>
+    {% else %}<li>No paid items.</li>{% endfor %}
+  </ul>
+</section>
+<form method="post" action="/ui/fees/mark-paid">
+  <h3>Mark Paid</h3>
+  <input name="fee_record_id" placeholder="Fee record id" />
+  <input name="paid_amount" placeholder="Amount" />
+  <button type="submit">Mark</button>
+</form>
+{% endblock %}

@@ -1,0 +1,21 @@
+:root {
+  --bg: #f6f8fb;
+  --card: #ffffff;
+  --text: #1b1f24;
+  --accent: #0f766e;
+  --border: #d8dee9;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, sans-serif;
+  background: linear-gradient(135deg, #eef6ff, #f8fbff);
+  color: var(--text);
+}
+header { background: var(--card); border-bottom: 1px solid var(--border); padding: 12px 20px; }
+nav a { margin-right: 12px; color: var(--accent); text-decoration: none; }
+main { max-width: 980px; margin: 18px auto; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid var(--border); padding: 8px; text-align: left; }
+button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 8px 12px; }
+input, select { border: 1px solid var(--border); border-radius: 6px; padding: 7px; }

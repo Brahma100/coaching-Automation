@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>System</h2>
+<section>
+  <h3>Backup & Restore</h3>
+  <p>Database file: <code>{{ db_path }}</code></p>
+  <p>
+    Last backup:
+    {% if last_backup %}
+      {{ last_backup.created_at }} ({{ last_backup.status }}) - {{ last_backup.message }}
+    {% else %}
+      never
+    {% endif %}
+  </p>
+  <form method="post" action="/ui/system/backup-now">
+    <button type="submit">Backup Now</button>
+  </form>
+  <p>
+    <a href="/ui/system/download-db">Download SQLite DB</a>
+  </p>
+</section>
+{% endblock %}

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Attendance: Batch {{ batch_id }}</h2>
+<form method="post">
+  <table>
+    <tr><th>Student</th><th>Status</th><th>Comment</th></tr>
+    {% for row in rows %}
+    <tr>
+      <td>
+        {{ row.student_name }}
+        <input type="hidden" name="student_id" value="{{ row.student_id }}" />
+      </td>
+      <td>
+        <select name="status">
+          <option value="Present" {% if row.status == 'Present' %}selected{% endif %}>Present</option>
+          <option value="Absent" {% if row.status == 'Absent' %}selected{% endif %}>Absent</option>
+          <option value="Late" {% if row.status == 'Late' %}selected{% endif %}>Late</option>
+        </select>
+      </td>
+      <td><input name="comment" value="{{ row.comment }}" /></td>
+    </tr>
+    {% endfor %}
+  </table>
+  <button type="submit">Submit Attendance</button>
+</form>
+{% endblock %}

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Teacher Action Inbox</h2>
+<table>
+  <tr>
+    <th>ID</th>
+    <th>Type</th>
+    <th>Student</th>
+    <th>Session</th>
+    <th>Note</th>
+    <th>Created</th>
+    <th>Action</th>
+  </tr>
+  {% for row in rows %}
+  <tr>
+    <td>{{ row.id }}</td>
+    <td>{{ row.type }}</td>
+    <td>{% if row.student_id %}{{ students.get(row.student_id, row.student_id) }}{% else %}-{% endif %}</td>
+    <td>{{ row.related_session_id or '-' }}</td>
+    <td>{{ row.note }}</td>
+    <td>{{ row.created_at }}</td>
+    <td>
+      <form method="post" action="/ui/teacher-actions/{{ row.id }}/resolve">
+        <button type="submit">Mark Resolved</button>
+      </form>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="7">No open actions.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

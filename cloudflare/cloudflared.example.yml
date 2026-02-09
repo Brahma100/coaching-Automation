@@ -1,0 +1,6 @@
+tunnel: your-tunnel-id
+credentials-file: C:\\path\\to\\credentials.json
+ingress:
+  - hostname: coaching.yourdomain.com
+    service: http://localhost:8000
+  - service: http_status:404
