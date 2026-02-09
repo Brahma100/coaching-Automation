@@ -1,0 +1,31 @@
+{% extends "student_base.html" %}
+{% block content %}
+<h2>My Fees</h2>
+<p>Read-only view of your fee status.</p>
+<p>Payment reference UPI ID: <strong>{{ upi_id }}</strong></p>
+
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Month</th>
+      <th>Total Fee</th>
+      <th>Paid Amount</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+      <tr>
+        <td>{{ row.month }}</td>
+        <td>{{ row.total_fee }}</td>
+        <td>{{ row.paid_amount }}</td>
+        <td>{{ row.status }}</td>
+      </tr>
+    {% else %}
+      <tr>
+        <td colspan="4">No fee records yet.</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

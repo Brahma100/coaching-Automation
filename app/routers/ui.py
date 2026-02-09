@@ -1,15 +1,15 @@
-from datetime import date
+import logging
+from datetime import date, datetime, time, timedelta
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Student
-from app.schemas import AttendanceItem, AttendanceSubmitRequest, HomeworkCreateRequest
-from app.services.attendance_service import get_attendance_for_batch_today, submit_attendance
+from app.models import Batch, ClassSession, FeeRecord, PendingAction, Student, StudentBatchMap
+from app.schemas import HomeworkCreateRequest
 from app.services.fee_service import get_fee_dashboard, mark_fee_paid
 from app.services.homework_service import create_homework, list_homework
 from app.services.insights_service import generate_insights
@@ -20,38 +20,111 @@ from app.services.system_service import get_last_backup, get_sqlite_db_path, run
 
 templates = Jinja2Templates(directory='app/ui/templates')
 router = APIRouter(prefix='/ui', tags=['UI'])
+logger = logging.getLogger(__name__)
 
 
 @router.get('/dashboard')
 def dashboard(request: Request, db: Session = Depends(get_db)):
     insights = generate_insights(db)
-    return templates.TemplateResponse('dashboard.html', {'request': request, 'insights': insights})
+    today = date.today()
+    start_dt = datetime.combine(today, time.min)
+    end_dt = start_dt + timedelta(days=1)
+    today_session = db.query(ClassSession).filter(
+        ClassSession.scheduled_start >= start_dt,
+        ClassSession.scheduled_start < end_dt,
+    ).order_by(ClassSession.scheduled_start.asc()).first()
+    pending_actions_count = db.query(PendingAction).filter(PendingAction.status == 'open').count()
+
+    unpaid = db.query(FeeRecord).filter(FeeRecord.is_paid.is_(False)).all()
+    overdue_count = sum(1 for row in unpaid if row.due_date < today)
+    due_soon_count = sum(1 for row in unpaid if today <= row.due_date <= (today + timedelta(days=3)))
+
+    return templates.TemplateResponse(
+        'dashboard.html',
+        {
+            'request': request,
+            'insights': insights,
+            'today_session': today_session,
+            'pending_actions_count': pending_actions_count,
+            'overdue_count': overdue_count,
+            'due_soon_count': due_soon_count,
+        },
+    )
+
+
+@router.get('/attendance')
+def attendance_page(
+    request: Request,
+    batch_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    _ = request
+    _ = db
+    url = '/ui/attendance/manage'
+    if batch_id:
+        url += f'?batch_id={batch_id}'
+    return RedirectResponse(url=url, status_code=303)
 
 
 @router.get('/attendance/{batch_id}')
-def attendance_page(batch_id: int, request: Request, db: Session = Depends(get_db)):
-    rows = get_attendance_for_batch_today(db, batch_id, date.today())
-    return templates.TemplateResponse('attendance.html', {'request': request, 'rows': rows, 'batch_id': batch_id})
+def attendance_page_for_batch(
+    batch_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    _ = request
+    _ = db
+    return RedirectResponse(url=f'/ui/attendance/manage?batch_id={batch_id}', status_code=303)
 
 
 @router.post('/attendance/{batch_id}')
 def attendance_submit(
     batch_id: int,
-    student_id: list[int] = Form(...),
-    status: list[str] = Form(...),
-    comment: list[str] = Form(...),
+    student_ids_form: list[int] | None = Form(default=None),
+    statuses_form: list[str] | None = Form(default=None),
+    comments_form: list[str] | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    records = [AttendanceItem(student_id=sid, status=st, comment=cm) for sid, st, cm in zip(student_id, status, comment)]
-    payload = AttendanceSubmitRequest(batch_id=batch_id, attendance_date=date.today(), records=records)
-    submit_attendance(db, payload.batch_id, payload.attendance_date, [r.model_dump() for r in records])
-    return RedirectResponse(url=f'/ui/attendance/{batch_id}', status_code=303)
+    _ = student_ids_form
+    _ = statuses_form
+    _ = comments_form
+    _ = db
+    return RedirectResponse(url=f'/ui/attendance/manage?batch_id={batch_id}', status_code=303)
 
 
 @router.get('/fees')
-def fees_page(request: Request, db: Session = Depends(get_db)):
+def fees_page(request: Request, batch_id: int | None = Query(default=None), db: Session = Depends(get_db)):
     data = get_fee_dashboard(db)
-    return templates.TemplateResponse('fees.html', {'request': request, 'data': data})
+    batches = db.query(Batch).order_by(Batch.name.asc()).all()
+
+    if batch_id is not None:
+        student_ids = {
+            sid
+            for (sid,) in db.query(StudentBatchMap.student_id).filter(
+                StudentBatchMap.batch_id == batch_id,
+                StudentBatchMap.active.is_(True),
+            ).all()
+        }
+        if not student_ids:
+            student_ids = {
+                sid
+                for (sid,) in db.query(Student.id).filter(Student.batch_id == batch_id).all()
+            }
+        data = {
+            'due': [row for row in data['due'] if row['student_id'] in student_ids],
+            'paid': [row for row in data['paid'] if row['student_id'] in student_ids],
+            'overdue': [row for row in data['overdue'] if row['student_id'] in student_ids],
+        }
+
+    return templates.TemplateResponse(
+        'fees.html',
+        {
+            'request': request,
+            'data': data,
+            'batches': batches,
+            'selected_batch_id': batch_id,
+        },
+    )
 
 
 @router.post('/fees/mark-paid')

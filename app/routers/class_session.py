@@ -18,6 +18,7 @@ def create(payload: ClassSessionCreateRequest, db: Session = Depends(get_db)):
         scheduled_start=payload.scheduled_start,
         teacher_id=payload.teacher_id,
         topic_planned=payload.topic_planned,
+        duration_minutes=payload.duration_minutes,
     )
     return {'id': row.id, 'status': row.status}
 
@@ -32,6 +33,7 @@ def get_one(session_id: int, db: Session = Depends(get_db)):
         'batch_id': row.batch_id,
         'subject': row.subject,
         'scheduled_start': row.scheduled_start,
+        'duration_minutes': row.duration_minutes,
         'actual_start': row.actual_start,
         'topic_planned': row.topic_planned,
         'topic_completed': row.topic_completed,
@@ -48,6 +50,7 @@ def list_batch(batch_id: int, db: Session = Depends(get_db)):
             'id': r.id,
             'subject': r.subject,
             'scheduled_start': r.scheduled_start,
+            'duration_minutes': r.duration_minutes,
             'status': r.status,
             'teacher_id': r.teacher_id,
         }
@@ -68,8 +71,13 @@ def start(session_id: int, db: Session = Depends(get_db)):
 def complete(session_id: int, payload: ClassSessionUpdateRequest, db: Session = Depends(get_db)):
     try:
         row = complete_class_session(db, session_id, topic_completed=payload.topic_completed)
-        if payload.status in ('completed', 'missed'):
-            row.status = payload.status
+        if payload.status in ('submitted', 'closed', 'missed', 'completed', 'running', 'open'):
+            if payload.status == 'completed':
+                row.status = 'submitted'
+            elif payload.status == 'running':
+                row.status = 'open'
+            else:
+                row.status = payload.status
             db.commit()
             db.refresh(row)
         return {'id': row.id, 'status': row.status, 'topic_completed': row.topic_completed}

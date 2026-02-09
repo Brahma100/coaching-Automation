@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Attendance Session #{{ session_row.id }}</h2>
+<p>Batch {{ session_row.batch_id }} | {{ session_row.subject }} | {{ session_row.scheduled_start }}</p>
+{% if saved == '1' %}
+  <p class="notice notice-success">Attendance submitted and session locked.</p>
+{% elif error == 'no-students' %}
+  <p class="notice notice-error">No students found for this session.</p>
+{% elif error == 'invalid-payload' %}
+  <p class="notice notice-error">Invalid form payload.</p>
+{% elif error == 'session-locked' %}
+  <p class="notice notice-error">Session already submitted and locked.</p>
+{% elif error == 'session-closed' %}
+  <p class="notice notice-error">Attendance window closed for this class.</p>
+{% elif error == 'submit-failed' %}
+  <p class="notice notice-error">Could not submit attendance due to a server error.</p>
+{% endif %}
+{% if not can_edit %}
+  <p><strong>Read-only:</strong> This session is locked.</p>
+{% endif %}
+{% if token_used %}
+  <p>Token-based session access is active.</p>
+{% endif %}
+<form method="post" action="/ui/attendance/session/{{ session_row.id }}">
+  <input type="hidden" name="token" value="{{ token }}" />
+  <table class="data-table">
+    <tr><th>Student</th><th>Status</th><th>Comment</th></tr>
+    {% for row in rows %}
+    <tr>
+      <td>
+        {{ row.student_name }}
+        <input type="hidden" name="student_id" value="{{ row.student_id }}" />
+      </td>
+      <td>
+        <select name="status" {% if not can_edit %}disabled{% endif %}>
+          <option value="Present" {% if row.status == 'Present' %}selected{% endif %}>Present</option>
+          <option value="Absent" {% if row.status == 'Absent' %}selected{% endif %}>Absent</option>
+          <option value="Late" {% if row.status == 'Late' %}selected{% endif %}>Late</option>
+        </select>
+      </td>
+      <td><input name="comment" value="{{ row.comment }}" {% if not can_edit %}readonly{% endif %} /></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if can_edit %}
+    <button type="submit">Submit Attendance</button>
+  {% endif %}
+</form>
+{% endblock %}

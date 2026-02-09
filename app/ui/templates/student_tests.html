@@ -1,0 +1,15 @@
+{% extends "student_base.html" %}
+{% block content %}
+<h2>My Tests</h2>
+<p>Read-only test list.</p>
+
+{% if rows %}
+<ul class="spaced-list">
+  {% for row in rows %}
+    <li>{{ row }}</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No test data yet.</p>
+{% endif %}
+{% endblock %}

@@ -1,9 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
 <h2>Fee Dashboard</h2>
+<form method="get" action="/ui/fees" class="form-inline">
+  <label for="batch_filter">Batch</label>
+  <select id="batch_filter" name="batch_id">
+    <option value="">All batches</option>
+    {% for b in batches %}
+      <option value="{{ b.id }}" {% if selected_batch_id == b.id %}selected{% endif %}>{{ b.name }} ({{ b.id }})</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Filter</button>
+</form>
 <section>
   <h3>Due</h3>
-  <ul>
+  <ul class="spaced-list">
     {% for r in data.due %}
       <li>#{{ r.id }} Student {{ r.student_id }} Amount {{ r.amount }} Due {{ r.due_date }}</li>
     {% else %}<li>No due items.</li>{% endfor %}
@@ -11,7 +21,7 @@
 </section>
 <section>
   <h3>Overdue</h3>
-  <ul>
+  <ul class="spaced-list">
     {% for r in data.overdue %}
       <li>#{{ r.id }} Student {{ r.student_id }} Pending {{ r.amount - r.paid_amount }} <a href="{{ r.upi_link }}">UPI Link</a></li>
     {% else %}<li>No overdue items.</li>{% endfor %}
@@ -19,16 +29,18 @@
 </section>
 <section>
   <h3>Paid</h3>
-  <ul>
+  <ul class="spaced-list">
     {% for r in data.paid %}
       <li>#{{ r.id }} Student {{ r.student_id }} Paid {{ r.paid_amount }}</li>
     {% else %}<li>No paid items.</li>{% endfor %}
   </ul>
 </section>
-<form method="post" action="/ui/fees/mark-paid">
+<form method="post" action="/ui/fees/mark-paid" class="stack-form">
   <h3>Mark Paid</h3>
-  <input name="fee_record_id" placeholder="Fee record id" />
-  <input name="paid_amount" placeholder="Amount" />
+  <label for="fee_record_id">Fee record id</label>
+  <input id="fee_record_id" name="fee_record_id" placeholder="Fee record id" />
+  <label for="paid_amount">Paid amount</label>
+  <input id="paid_amount" name="paid_amount" placeholder="Amount" />
   <button type="submit">Mark</button>
 </form>
 {% endblock %}

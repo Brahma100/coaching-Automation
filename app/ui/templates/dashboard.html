@@ -1,6 +1,37 @@
 {% extends "base.html" %}
 {% block content %}
 <h2>Teacher Dashboard</h2>
+<section class="card-grid">
+  <article class="card">
+    <h3>Today's Class Session</h3>
+    {% if today_session %}
+      <p>Batch {{ today_session.batch_id }} | {{ today_session.subject }} | {{ today_session.scheduled_start }}</p>
+      <a class="button-link" href="/ui/attendance/session/{{ today_session.id }}">Open Attendance</a>
+    {% else %}
+      <p>No class session scheduled for today.</p>
+      <a class="button-link" href="/ui/attendance/manage">Open Attendance</a>
+    {% endif %}
+  </article>
+  <article class="card">
+    <h3>Pending Actions</h3>
+    <p>{{ pending_actions_count }} open</p>
+    <a class="button-link" href="/ui/teacher-actions">Open Teacher Actions</a>
+  </article>
+  <article class="card">
+    <h3>Fee Alerts</h3>
+    <p>{{ overdue_count }} overdue | {{ due_soon_count }} due soon</p>
+    <a class="button-link" href="/ui/fees">Open Fees</a>
+  </article>
+  <article class="card">
+    <h3>Quick Links</h3>
+    <div class="quick-links">
+      <a href="/ui/students/add">Add Student</a>
+      <a href="/ui/batches">Create Batch</a>
+      <a href="/ui/homework">Homework</a>
+      <a href="/ui/referrals">Referrals</a>
+    </div>
+  </article>
+</section>
 <section>
   <h3>Low Attendance</h3>
   <ul>

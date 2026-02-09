@@ -1,0 +1,28 @@
+{% extends "student_base.html" %}
+{% block content %}
+<h2>My Attendance</h2>
+<p>Read-only view of your latest attendance records.</p>
+
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>Status</th>
+      <th>Comment</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+      <tr>
+        <td>{{ row.date }}</td>
+        <td>{{ row.status }}</td>
+        <td>{{ row.comment }}</td>
+      </tr>
+    {% else %}
+      <tr>
+        <td colspan="3">No attendance records yet.</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

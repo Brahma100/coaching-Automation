@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Invite Allowed User</h2>
+<p>Create a new allowlist entry with invited status.</p>
+
+{% if success %}
+<div class="notice notice-success">{{ success }}</div>
+{% endif %}
+{% if error %}
+<div class="notice notice-error">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/ui/admin/allowed-users/invite" class="stack-form">
+  <label for="phone">Phone</label>
+  <input id="phone" name="phone" placeholder="10-digit phone" required />
+
+  <label for="role">Role</label>
+  <select id="role" name="role" required>
+    <option value="teacher">TEACHER</option>
+    <option value="student">STUDENT</option>
+  </select>
+
+  <button type="submit">Invite</button>
+</form>
+
+<p><a href="/ui/admin/allowed-users">Back to Allowed Users</a></p>
+{% endblock %}

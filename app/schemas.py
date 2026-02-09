@@ -49,12 +49,13 @@ class ClassSessionCreateRequest(BaseModel):
     scheduled_start: datetime
     topic_planned: str = ''
     teacher_id: int
+    duration_minutes: int = Field(default=60, ge=1, le=180)
 
 
 class ClassSessionUpdateRequest(BaseModel):
     actual_start: datetime | None = None
     topic_completed: str = ''
-    status: Literal['scheduled', 'running', 'completed', 'missed']
+    status: Literal['scheduled', 'open', 'submitted', 'closed', 'missed', 'running', 'completed']
 
 
 class ParentCreateRequest(BaseModel):

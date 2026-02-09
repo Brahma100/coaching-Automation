@@ -9,14 +9,23 @@
 <body>
   <header>
     <h1>Coaching Automation</h1>
-    <nav>
+    <nav class="top-nav">
       <a href="/ui/dashboard">Dashboard</a>
+      <a href="/ui/students">Students</a>
+      <a href="/ui/students/add">Add Student</a>
+      <a href="/ui/batches">Batches</a>
       <a href="/ui/fees">Fees</a>
       <a href="/ui/homework">Homework</a>
       <a href="/ui/referrals">Referrals</a>
-      <a href="/ui/attendance/1">Attendance</a>
+      <a href="/ui/attendance/manage">Manage Attendance</a>
       <a href="/ui/teacher-actions">Teacher Actions</a>
+      {% if request.state.auth_user and request.state.auth_user.role == 'admin' %}
+      <a href="/ui/admin/allowed-users">Manage Users</a>
+      {% endif %}
       <a href="/ui/system">System</a>
+      <form method="post" action="/auth/logout" class="inline-form">
+        <button type="submit" class="btn-link">Logout</button>
+      </form>
     </nav>
   </header>
   <main>

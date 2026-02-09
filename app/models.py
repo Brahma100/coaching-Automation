@@ -1,8 +1,21 @@
 from datetime import date, datetime
+from enum import Enum
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+
+
+class Role(str, Enum):
+    ADMIN = 'admin'
+    TEACHER = 'teacher'
+    STUDENT = 'student'
+
+
+class AllowedUserStatus(str, Enum):
+    INVITED = 'invited'
+    ACTIVE = 'active'
+    DISABLED = 'disabled'
 
 
 class Batch(Base):
@@ -11,8 +24,14 @@ class Batch(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(120), unique=True)
     start_time: Mapped[str] = mapped_column(String(10), default='07:00')
+    subject: Mapped[str] = mapped_column(String(120), default='General', index=True)
+    academic_level: Mapped[str] = mapped_column(String(20), default='')
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     students: Mapped[list['Student']] = relationship('Student', back_populates='batch')
+    schedules: Mapped[list['BatchSchedule']] = relationship('BatchSchedule', back_populates='batch')
+    student_links: Mapped[list['StudentBatchMap']] = relationship('StudentBatchMap', back_populates='batch')
     class_sessions: Mapped[list['ClassSession']] = relationship('ClassSession', back_populates='batch')
 
 
@@ -26,11 +45,14 @@ class Student(Base):
     batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'))
 
     batch: Mapped['Batch'] = relationship('Batch', back_populates='students')
+    batch_links: Mapped[list['StudentBatchMap']] = relationship('StudentBatchMap', back_populates='student')
     attendances: Mapped[list['AttendanceRecord']] = relationship('AttendanceRecord', back_populates='student')
     fees: Mapped[list['FeeRecord']] = relationship('FeeRecord', back_populates='student')
     homework_submissions: Mapped[list['HomeworkSubmission']] = relationship('HomeworkSubmission', back_populates='student')
     referrals: Mapped[list['ReferralCode']] = relationship('ReferralCode', back_populates='student')
     parent_links: Mapped[list['ParentStudentMap']] = relationship('ParentStudentMap', back_populates='student')
+    risk_profile: Mapped['StudentRiskProfile | None'] = relationship('StudentRiskProfile', back_populates='student', uselist=False)
+    risk_events: Mapped[list['StudentRiskEvent']] = relationship('StudentRiskEvent', back_populates='student')
 
 
 class AttendanceRecord(Base):
@@ -135,13 +157,41 @@ class ClassSession(Base):
     batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
     subject: Mapped[str] = mapped_column(String(80), default='General')
     scheduled_start: Mapped[datetime] = mapped_column(DateTime, index=True)
+    duration_minutes: Mapped[int] = mapped_column(Integer, default=60)
     actual_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     topic_planned: Mapped[str] = mapped_column(Text, default='')
     topic_completed: Mapped[str] = mapped_column(Text, default='')
     teacher_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
-    status: Mapped[str] = mapped_column(String(20), default='scheduled')  # scheduled|running|completed|missed
+    status: Mapped[str] = mapped_column(String(20), default='scheduled')  # scheduled|open|submitted|closed|missed (legacy: running|completed)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     batch: Mapped['Batch'] = relationship('Batch', back_populates='class_sessions')
+
+
+class BatchSchedule(Base):
+    __tablename__ = 'batch_schedules'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
+    weekday: Mapped[int] = mapped_column(Integer, index=True)  # Monday=0 ... Sunday=6
+    start_time: Mapped[str] = mapped_column(String(5))
+    duration_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    batch: Mapped['Batch'] = relationship('Batch', back_populates='schedules')
+
+
+class StudentBatchMap(Base):
+    __tablename__ = 'student_batch_map'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey('students.id'), index=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    student: Mapped['Student'] = relationship('Student', back_populates='batch_links')
+    batch: Mapped['Batch'] = relationship('Batch', back_populates='student_links')
 
 
 class Parent(Base):
@@ -216,6 +266,28 @@ class StaffUser(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class AuthUser(Base):
+    __tablename__ = 'auth_users'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    phone: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    role: Mapped[str] = mapped_column(String(20), default=Role.TEACHER.value, index=True)
+    last_otp: Mapped[str] = mapped_column(String(255), default='')
+    otp_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    password_hash: Mapped[str] = mapped_column(String(255), default='')
+    google_sub: Mapped[str] = mapped_column(String(255), default='', index=True)
+
+
+class AllowedUser(Base):
+    __tablename__ = 'allowed_users'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    phone: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    role: Mapped[str] = mapped_column(String(20), default=Role.TEACHER.value, index=True)
+    status: Mapped[str] = mapped_column(String(20), default=AllowedUserStatus.INVITED.value, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class BackupLog(Base):
     __tablename__ = 'backup_logs'
 
@@ -234,3 +306,32 @@ class CommunicationLog(Base):
     message: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default='queued')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class StudentRiskProfile(Base):
+    __tablename__ = 'student_risk_profiles'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey('students.id'), unique=True, index=True)
+    attendance_score: Mapped[float] = mapped_column(Float, default=1.0)
+    homework_score: Mapped[float] = mapped_column(Float, default=1.0)
+    fee_score: Mapped[float] = mapped_column(Float, default=1.0)
+    test_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    final_risk_score: Mapped[float] = mapped_column(Float, default=100.0, index=True)
+    risk_level: Mapped[str] = mapped_column(String(10), default='LOW', index=True)
+    last_computed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    student: Mapped['Student'] = relationship('Student', back_populates='risk_profile')
+
+
+class StudentRiskEvent(Base):
+    __tablename__ = 'student_risk_events'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey('students.id'), index=True)
+    previous_risk_level: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    new_risk_level: Mapped[str] = mapped_column(String(10), index=True)
+    reason_json: Mapped[str] = mapped_column(Text, default='{}')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    student: Mapped['Student'] = relationship('Student', back_populates='risk_events')

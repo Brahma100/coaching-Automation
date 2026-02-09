@@ -43,3 +43,17 @@ def verify_and_consume_token(db: Session, token: str, expected_action_type: str)
     row.consumed = True
     db.commit()
     return json.loads(row.payload_json or '{}')
+
+
+def verify_token(db: Session, token: str, expected_action_type: str):
+    token_hash = _hash_token(token)
+    row = db.query(ActionToken).filter(ActionToken.token_hash == token_hash).first()
+    if not row:
+        raise ValueError('Invalid token')
+    if row.consumed:
+        raise ValueError('Token already consumed')
+    if row.action_type != expected_action_type:
+        raise ValueError('Token action mismatch')
+    if row.expires_at < datetime.utcnow():
+        raise ValueError('Token expired')
+    return json.loads(row.payload_json or '{}')

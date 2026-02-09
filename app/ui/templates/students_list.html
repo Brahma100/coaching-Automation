@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Students</h2>
+<p><a class="button-link" href="/ui/students/add">Add Student</a></p>
+<table class="data-table">
+  <tr>
+    <th>ID</th>
+    <th>Name</th>
+    <th>Phone</th>
+    <th>Batch</th>
+    <th>Contact Phone</th>
+  </tr>
+  {% for s in rows %}
+  <tr>
+    <td>{{ s.id }}</td>
+    <td>{{ s.name }}</td>
+    <td>{{ s.guardian_phone or '-' }}</td>
+    <td>{{ batches.get(s.batch_id, s.batch_id) }}</td>
+    <td>{{ s.guardian_phone or '-' }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5">No students found.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

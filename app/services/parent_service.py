@@ -4,6 +4,7 @@ from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from app.models import AttendanceRecord, Parent, ParentStudentMap, Student
+from app.services.batch_membership_service import list_active_student_ids_for_batch
 from app.services.comms_service import queue_telegram_by_chat_id
 
 
@@ -63,7 +64,8 @@ def notify_parents_for_unpaid_fees(db: Session, student_ids: list[int]):
 
 
 def notify_parents_for_low_attendance_streak(db: Session, batch_id: int, streak_threshold: int = 3):
-    students = db.query(Student).filter(Student.batch_id == batch_id).all()
+    student_ids = list_active_student_ids_for_batch(db, batch_id)
+    students = db.query(Student).filter(Student.id.in_(student_ids)).all() if student_ids else []
     for student in students:
         latest = db.query(AttendanceRecord).filter(AttendanceRecord.student_id == student.id).order_by(AttendanceRecord.attendance_date.desc()).limit(streak_threshold).all()
         if len(latest) < streak_threshold:

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Batch Management</h2>
+<p><a class="button-link" href="/ui/batches/add">Create Batch</a></p>
+
+<h3>Existing Batches</h3>
+<table class="data-table">
+  <tr><th>ID</th><th>Name</th><th>Subject</th><th>Level</th><th>Status</th><th>Students</th><th>Schedules</th><th>Actions</th></tr>
+  {% for row in rows %}
+  <tr>
+    <td>{{ row.id }}</td>
+    <td>{{ row.name }}</td>
+    <td>{{ row.subject }}</td>
+    <td>{{ row.academic_level or '-' }}</td>
+    <td>{{ 'Active' if row.active else 'Inactive' }}</td>
+    <td>{{ row.student_count }}</td>
+    <td>
+      {% if row.schedules %}
+        {% for s in row.schedules %}
+          <div>Day {{ s.weekday }} - {{ s.start_time }} ({{ s.duration_minutes }}m)</div>
+        {% endfor %}
+      {% else %}
+        <span>No schedules</span>
+      {% endif %}
+    </td>
+    <td><a href="/ui/batches/{{ row.id }}">Manage</a></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="8">No batches yet.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

@@ -1,8 +1,32 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Attendance: Batch {{ batch_id }}</h2>
-<form method="post">
-  <table>
+<h2>Attendance{% if batch_id %}: Batch {{ batch_id }}{% endif %}</h2>
+{% if saved == '1' %}
+  <p class="notice notice-success">Attendance submitted successfully.</p>
+{% elif error == 'no-students' %}
+  <p class="notice notice-error">No students found in this batch, so attendance was not submitted.</p>
+{% elif error == 'invalid-payload' %}
+  <p class="notice notice-error">Attendance form data was incomplete. Please reload and try again.</p>
+{% elif error == 'submit-failed' %}
+  <p class="notice notice-error">Attendance could not be submitted due to a server error. Check logs and retry.</p>
+{% endif %}
+<form method="get" action="/ui/attendance" class="form-inline">
+  <label for="batch_filter">Batch</label>
+  <select id="batch_filter" name="batch_id">
+    {% for b in batches %}
+      <option value="{{ b.id }}" {% if batch_id == b.id %}selected{% endif %}>{{ b.name }} ({{ b.id }})</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Load</button>
+</form>
+{% if not batch_id %}
+  <p>No batches found. Create a batch first.</p>
+{% else %}
+{% if not rows %}
+  <p>No students in this batch yet. Add students before submitting attendance.</p>
+{% else %}
+<form method="post" action="/ui/attendance/{{ batch_id }}">
+  <table class="data-table">
     <tr><th>Student</th><th>Status</th><th>Comment</th></tr>
     {% for row in rows %}
     <tr>
@@ -23,4 +47,6 @@
   </table>
   <button type="submit">Submit Attendance</button>
 </form>
+{% endif %}
+{% endif %}
 {% endblock %}

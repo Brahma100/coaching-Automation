@@ -1,0 +1,33 @@
+{% extends "student_base.html" %}
+{% block content %}
+<h2>My Homework</h2>
+<p>Read-only view of assigned homework and submission status.</p>
+<p>Assigned: {{ summary.assigned }} | Submitted: {{ summary.submitted }} | Pending: {{ summary.assigned - summary.submitted }}</p>
+
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Subject</th>
+      <th>Title</th>
+      <th>Assigned Date</th>
+      <th>Due Date</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+      <tr>
+        <td>{{ row.subject }}</td>
+        <td>{{ row.title }}</td>
+        <td>{{ row.assigned_date }}</td>
+        <td>{{ row.due_date }}</td>
+        <td>{{ row.submission_status }}</td>
+      </tr>
+    {% else %}
+      <tr>
+        <td colspan="5">No homework assigned yet.</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

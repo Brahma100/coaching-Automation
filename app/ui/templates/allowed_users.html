@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Allowed Users</h2>
+<p>Manage allowlist entries for OTP login authorization.</p>
+
+{% if success %}
+<div class="notice notice-success">{{ success }}</div>
+{% endif %}
+{% if error %}
+<div class="notice notice-error">{{ error }}</div>
+{% endif %}
+
+<p><a class="button-link" href="/ui/admin/allowed-users/invite">Invite User</a></p>
+
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Phone</th>
+      <th>Role</th>
+      <th>Status</th>
+      <th>Created At</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.phone }}</td>
+      <td>{{ row.role|upper }}</td>
+      <td>{{ row.status|upper }}</td>
+      <td>{{ row.created_at }}</td>
+      <td>
+        <div class="row-actions">
+          <form method="post" action="/ui/admin/allowed-users/activate" class="inline-form">
+            <input type="hidden" name="phone" value="{{ row.phone }}" />
+            <button type="submit">Activate</button>
+          </form>
+          <form method="post" action="/ui/admin/allowed-users/deactivate" class="inline-form">
+            <input type="hidden" name="phone" value="{{ row.phone }}" />
+            <button type="submit">Deactivate</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="5">No allowed users found.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

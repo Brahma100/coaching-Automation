@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Add Student</h2>
+<form method="post" action="/students/create" class="stack-form">
+  <label for="name">Name</label>
+  <input id="name" name="name" required />
+
+  <label for="phone">Phone</label>
+  <input id="phone" name="phone" placeholder="Student phone" />
+
+  <label for="batch_id">Batch</label>
+  <select id="batch_id" name="batch_id" required>
+    {% for b in batches %}
+      <option value="{{ b.id }}">{{ b.name }} ({{ b.id }})</option>
+    {% endfor %}
+  </select>
+
+  <label for="parent_phone">Parent Phone (optional)</label>
+  <input id="parent_phone" name="parent_phone" placeholder="Parent/guardian phone" />
+
+  <p>Initial fee to be created: {{ default_fee_amount }}</p>
+  <button type="submit">Create Student</button>
+</form>
+{% endblock %}

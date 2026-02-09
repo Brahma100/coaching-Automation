@@ -1,0 +1,338 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+  background: #f5f7fb;
+  color: #0f172a;
+  transition: background-color 180ms ease, color 180ms ease;
+}
+
+html.dark body {
+  background: #020617;
+  color: #e2e8f0;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c6cfdd;
+  border-radius: 999px;
+}
+
+input,
+select,
+button {
+  font-family: inherit;
+}
+
+.auth-shell {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 15% 20%, #dbeafe 0%, transparent 35%),
+    radial-gradient(circle at 85% 80%, #e2e8f0 0%, transparent 38%),
+    linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+}
+
+.auth-shell::before,
+.auth-shell::after {
+  content: "";
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(50px);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.auth-shell::before {
+  width: 320px;
+  height: 320px;
+  left: -80px;
+  top: -60px;
+  background: rgba(47, 123, 246, 0.35);
+  animation: auth-bg-float-a 12s ease-in-out infinite;
+}
+
+.auth-shell::after {
+  width: 360px;
+  height: 360px;
+  right: -120px;
+  bottom: -90px;
+  background: rgba(72, 191, 109, 0.28);
+  animation: auth-bg-float-b 14s ease-in-out infinite;
+}
+
+.dark .auth-shell {
+  background:
+    radial-gradient(circle at 20% 25%, #1e3a8a 0%, transparent 35%),
+    radial-gradient(circle at 80% 75%, #0f172a 0%, transparent 40%),
+    linear-gradient(180deg, #020617 0%, #0b1124 100%);
+}
+
+.dark .auth-shell::before {
+  background: rgba(59, 130, 246, 0.28);
+}
+
+.dark .auth-shell::after {
+  background: rgba(16, 185, 129, 0.22);
+}
+
+.auth-card {
+  position: relative;
+  z-index: 2;
+  animation: auth-card-rise 460ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.auth-motion-wrap {
+  position: relative;
+  overflow: hidden;
+  border-radius: 1rem;
+  border: 1px solid rgb(226 232 240);
+  background: linear-gradient(90deg, #eff6ff, #ecfeff, #eef2ff);
+}
+
+.dark .auth-motion-wrap {
+  border-color: rgb(51 65 85);
+  background: linear-gradient(90deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.8), rgba(30, 41, 59, 0.8));
+}
+
+.auth-motion-wrap::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  background: linear-gradient(120deg, rgba(47, 123, 246, 0.45), rgba(72, 191, 109, 0.3), rgba(47, 123, 246, 0.45));
+  filter: blur(16px);
+  opacity: 0.7;
+  animation: auth-gradient-flow 7s linear infinite;
+}
+
+.auth-motion-track {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: max-content;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  animation: auth-track-slide 18s linear infinite;
+}
+
+.auth-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(47, 123, 246, 0.25);
+  background: rgba(255, 255, 255, 0.88);
+  padding: 0.45rem 0.8rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #1e293b;
+  backdrop-filter: blur(4px);
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.auth-chip:hover {
+  transform: translateY(-2px) scale(1.03);
+  box-shadow: 0 8px 18px rgba(47, 123, 246, 0.2);
+}
+
+.dark .auth-chip {
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.9);
+  color: #e2e8f0;
+}
+
+.action-glow-btn {
+  --glow-angle: 0deg;
+  --glow-inner: #2f7bf6;
+  --glow-accent: #60a5fa;
+  border: 2px solid transparent;
+  background:
+    linear-gradient(var(--glow-inner), var(--glow-inner)) padding-box,
+    conic-gradient(
+      from var(--glow-angle),
+      rgba(96, 165, 250, 0.18) 0deg,
+      rgba(96, 165, 250, 0.18) 300deg,
+      var(--glow-accent) 330deg,
+      rgba(96, 165, 250, 0.18) 360deg
+    ) border-box;
+  animation: action-glow-spin 3s linear infinite;
+  transition: filter 160ms ease;
+}
+
+.action-glow-btn:hover {
+  animation-duration: 2s;
+  filter: brightness(1.04);
+}
+
+.action-glow-btn:disabled {
+  animation-play-state: paused;
+  filter: saturate(0.7);
+}
+
+.google-anim-btn {
+  --glow-inner: #f8fafc;
+  border-width: 2px;
+  background:
+    linear-gradient(var(--glow-inner), var(--glow-inner)) padding-box,
+    conic-gradient(
+      from var(--glow-angle),
+      #4285f4 0deg 90deg,
+      #34a853 90deg 180deg,
+      #fbbc05 180deg 270deg,
+      #ea4335 270deg 360deg
+    ) border-box;
+  animation-duration: 2.2s;
+}
+
+.dark .google-anim-btn {
+  --glow-inner: rgb(51 65 85);
+}
+
+@keyframes action-glow-spin {
+  0% { --glow-angle: 0deg; }
+  100% { --glow-angle: 360deg; }
+}
+
+@property --glow-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes auth-track-slide {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+@keyframes auth-gradient-flow {
+  0% { transform: translateX(-8%); }
+  50% { transform: translateX(8%); }
+  100% { transform: translateX(-8%); }
+}
+
+@keyframes auth-card-rise {
+  0% { opacity: 0; transform: translateY(12px) scale(0.985); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes auth-bg-float-a {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(55px, 25px, 0) scale(1.08); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes auth-bg-float-b {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(-60px, -24px, 0) scale(1.06); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@layer base {
+  .dark .bg-white {
+    background-color: rgb(15 23 42) !important;
+  }
+
+  .dark .bg-slate-50 {
+    background-color: rgb(30 41 59) !important;
+  }
+
+  .dark .bg-\[\#f8fbff\],
+  .dark .bg-\[\#fff8f2\],
+  .dark .bg-\[\#f2fff7\],
+  .dark .bg-\[\#f8fafc\],
+  .dark .bg-\[\#f0f4ff\] {
+    background-color: rgb(30 41 59) !important;
+  }
+
+  .dark .border-slate-200 {
+    border-color: rgb(51 65 85) !important;
+  }
+
+  .dark .border-slate-100 {
+    border-color: rgb(51 65 85) !important;
+  }
+
+  .dark .ring-slate-200 {
+    --tw-ring-color: rgb(51 65 85) !important;
+  }
+
+  .dark .text-slate-900 {
+    color: rgb(241 245 249) !important;
+  }
+
+  .dark .text-slate-800 {
+    color: rgb(226 232 240) !important;
+  }
+
+  .dark .text-slate-700 {
+    color: rgb(203 213 225) !important;
+  }
+
+  .dark .text-slate-600 {
+    color: rgb(148 163 184) !important;
+  }
+
+  .dark .text-slate-500 {
+    color: rgb(148 163 184) !important;
+  }
+
+  .dark input,
+  .dark select,
+  .dark textarea {
+    background-color: rgb(15 23 42);
+    color: rgb(226 232 240);
+    border-color: rgb(51 65 85);
+  }
+
+  .dark input::placeholder,
+  .dark textarea::placeholder {
+    color: rgb(100 116 139);
+  }
+
+  .dark table thead tr {
+    border-color: rgb(51 65 85) !important;
+  }
+
+  .dark table tbody tr {
+    border-color: rgb(51 65 85) !important;
+  }
+
+  .dark .recharts-text {
+    fill: rgb(203 213 225) !important;
+  }
+
+  .dark .recharts-cartesian-axis-tick-value {
+    fill: rgb(148 163 184) !important;
+  }
+
+  .dark .recharts-cartesian-grid line {
+    stroke: rgb(51 65 85) !important;
+  }
+
+  .dark .recharts-default-tooltip {
+    background-color: rgb(15 23 42) !important;
+    border: 1px solid rgb(51 65 85) !important;
+  }
+
+  .dark .recharts-tooltip-item,
+  .dark .recharts-tooltip-label {
+    color: rgb(226 232 240) !important;
+  }
+}

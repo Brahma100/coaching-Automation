@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Batch: {{ batch.name }}</h2>
+
+<h3>Edit Batch</h3>
+<form id="batch-edit-form" class="stack-form">
+  <label for="name">Name</label>
+  <input id="name" name="name" value="{{ batch.name }}" required />
+
+  <label for="subject">Subject</label>
+  <input id="subject" name="subject" value="{{ batch.subject }}" required />
+
+  <label for="academic_level">Academic Level</label>
+  <input id="academic_level" name="academic_level" value="{{ batch.academic_level }}" />
+
+  <label><input id="active" type="checkbox" {% if batch.active %}checked{% endif %} /> Active</label>
+  <button type="submit">Save Batch</button>
+</form>
+
+<h3>Schedules</h3>
+<form method="post" action="/ui/batches/{{ batch.id }}/schedule/add" class="form-inline">
+  <select name="weekday" required>
+    <option value="0">Mon</option>
+    <option value="1">Tue</option>
+    <option value="2">Wed</option>
+    <option value="3">Thu</option>
+    <option value="4">Fri</option>
+    <option value="5">Sat</option>
+    <option value="6">Sun</option>
+  </select>
+  <input type="time" name="start_time" required />
+  <input type="number" name="duration_minutes" min="1" max="180" value="60" required />
+  <button type="submit">Add Schedule</button>
+</form>
+
+<table class="data-table">
+  <tr><th>ID</th><th>Weekday</th><th>Start</th><th>Duration</th><th>Action</th></tr>
+  {% for s in batch.schedules %}
+  <tr>
+    <td>{{ s.id }}</td>
+    <td>{{ s.weekday }}</td>
+    <td>{{ s.start_time }}</td>
+    <td>{{ s.duration_minutes }}m</td>
+    <td>
+      <form method="post" action="/ui/batches/{{ batch.id }}/schedule/{{ s.id }}/delete" class="inline-form">
+        <button type="submit">Delete</button>
+      </form>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5">No schedule slots yet.</td></tr>
+  {% endfor %}
+</table>
+
+<h3>Linked Students</h3>
+<form method="post" action="/ui/batches/{{ batch.id }}/students/link" class="form-inline">
+  <select name="student_id" required>
+    <option value="">Select student</option>
+    {% for s in available_students %}
+    <option value="{{ s.id }}">{{ s.name }} ({{ s.id }})</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Link Student</button>
+</form>
+
+<table class="data-table">
+  <tr><th>ID</th><th>Name</th><th>Phone</th><th>Joined</th><th>Action</th></tr>
+  {% for s in linked_students %}
+  <tr>
+    <td>{{ s.student_id }}</td>
+    <td>{{ s.name }}</td>
+    <td>{{ s.phone }}</td>
+    <td>{{ s.joined_at }}</td>
+    <td>
+      <form method="post" action="/ui/batches/{{ batch.id }}/students/{{ s.student_id }}/unlink" class="inline-form">
+        <button type="submit">Unlink</button>
+      </form>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5">No linked students.</td></tr>
+  {% endfor %}
+</table>
+
+<p><a href="/ui/batches">Back to Batches</a></p>
+
+<script>
+  const form = document.getElementById('batch-edit-form');
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = {
+      name: document.getElementById('name').value,
+      subject: document.getElementById('subject').value,
+      academic_level: document.getElementById('academic_level').value,
+      active: document.getElementById('active').checked
+    };
+    const res = await fetch('/api/batches/{{ batch.id }}', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) {
+      window.location.reload();
+      return;
+    }
+    const data = await res.json();
+    alert(data.detail || 'Failed to update batch');
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Login | Coaching Automation</title>
+  <link rel="stylesheet" href="/ui-static/styles.css" />
+</head>
+<body>
+  <main class="auth-container">
+    <h2>Teacher Login</h2>
+    <p>Request OTP on your phone and verify to continue.</p>
+    <form id="request-form" class="stack-form">
+      <label for="phone">Phone</label>
+      <input id="phone" name="phone" placeholder="10-digit phone" required />
+      <button type="submit">Request OTP</button>
+    </form>
+    <form id="verify-form" class="stack-form">
+      <input type="hidden" id="next" value="{{ next or '/ui/dashboard' }}" />
+      <label for="otp">OTP</label>
+      <input id="otp" name="otp" placeholder="6-digit OTP" required />
+      <button type="submit">Verify OTP</button>
+    </form>
+    <p id="login-message"></p>
+  </main>
+  <script>
+    const phoneInput = document.getElementById('phone');
+    const otpInput = document.getElementById('otp');
+    const nextInput = document.getElementById('next');
+    const message = document.getElementById('login-message');
+
+    document.getElementById('request-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      message.textContent = '';
+      const payload = { phone: phoneInput.value };
+      const res = await fetch('/auth/request-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        message.textContent = data.detail || 'Failed to request OTP.';
+        return;
+      }
+      message.textContent = 'OTP sent via Telegram.';
+    });
+
+    document.getElementById('verify-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      message.textContent = '';
+      const payload = { phone: phoneInput.value, otp: otpInput.value, next: nextInput.value };
+      const res = await fetch('/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        message.textContent = data.detail || 'OTP verification failed.';
+        return;
+      }
+      window.location.href = data.next || '/ui/dashboard';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+{% extends "student_base.html" %}
+{% block content %}
+<h2>Welcome, {{ student.name }}</h2>
+<p>View-only dashboard. You can see your progress here, but cannot edit records.</p>
+
+<section class="card-grid">
+  <article class="card">
+    <h3>Attendance Summary</h3>
+    <p>{{ data.attendance.percentage }}% attendance</p>
+    <p>Present: {{ data.attendance.present_count }} | Absent: {{ data.attendance.absent_count }} | Late: {{ data.attendance.late_count }}</p>
+  </article>
+  <article class="card">
+    <h3>Homework Summary</h3>
+    <p>Assigned: {{ data.homework.assigned_count }}</p>
+    <p>Submitted: {{ data.homework.submitted_count }} | Pending: {{ data.homework.pending_count }}</p>
+  </article>
+  <article class="card">
+    <h3>Fee Status</h3>
+    <p>Paid: {{ data.fees.paid_count }}</p>
+    <p>Due: {{ data.fees.due_count }} | Overdue: {{ data.fees.overdue_count }}</p>
+  </article>
+  <article class="card">
+    <h3>Upcoming Tests</h3>
+    {% if data.upcoming_tests %}
+      <ul class="spaced-list">
+        {% for row in data.upcoming_tests %}
+          <li>{{ row.subject }} | {{ row.scheduled_start }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No upcoming tests yet.</p>
+    {% endif %}
+  </article>
+</section>
+{% endblock %}

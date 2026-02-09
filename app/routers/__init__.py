@@ -1,8 +1,16 @@
-from app.routers import actions, attendance, class_session, communications, dashboard, fee, homework, offers, parents, referral, rules, ui
+from app.routers import actions, admin_allowlist, allowlist_admin, allowlist_admin_ui, attendance, attendance_manage_ui, attendance_session_api, attendance_session_ui, auth, batches_ui, class_session, communications, dashboard, fee, homework, offers, parents, referral, rules, student_api, student_risk, student_ui, students_ui, teacher_brief, ui
 
 __all__ = [
     'actions',
+    'admin_allowlist',
+    'allowlist_admin',
+    'allowlist_admin_ui',
     'attendance',
+    'attendance_manage_ui',
+    'attendance_session_api',
+    'attendance_session_ui',
+    'auth',
+    'batches_ui',
     'class_session',
     'communications',
     'dashboard',
@@ -12,5 +20,10 @@ __all__ = [
     'parents',
     'referral',
     'rules',
+    'student_api',
+    'student_risk',
+    'student_ui',
+    'students_ui',
+    'teacher_brief',
     'ui',
 ]

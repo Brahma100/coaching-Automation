@@ -2,14 +2,16 @@ from datetime import date
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
-from app.models import AttendanceRecord, Batch, Student
+from app.models import AttendanceRecord, Batch, ClassSession, Student
+from app.services.batch_membership_service import list_active_student_ids_for_batch
 from app.services.post_class_pipeline import run_post_class_pipeline
 
 
 def get_attendance_for_batch_today(db: Session, batch_id: int, target_date: date):
-    students = db.query(Student).filter(Student.batch_id == batch_id).all()
+    student_ids = list_active_student_ids_for_batch(db, batch_id)
+    students = db.query(Student).filter(Student.id.in_(student_ids)).all() if student_ids else []
     records = db.query(AttendanceRecord).join(Student).filter(
-        and_(Student.batch_id == batch_id, AttendanceRecord.attendance_date == target_date)
+        and_(AttendanceRecord.student_id.in_(student_ids), AttendanceRecord.attendance_date == target_date)
     ).all()
     by_student = {r.student_id: r for r in records}
 
@@ -35,7 +37,15 @@ def submit_attendance(
     scheduled_start=None,
     topic_planned: str = '',
     topic_completed: str = '',
+    class_session_id: int | None = None,
 ):
+    if class_session_id:
+        session_row = db.query(ClassSession).filter(ClassSession.id == class_session_id).first()
+        if not session_row:
+            raise ValueError('Class session not found')
+        if session_row.status in ('closed', 'missed'):
+            raise ValueError('Attendance window closed for this class.')
+
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
     if not batch:
         raise ValueError('Batch not found')

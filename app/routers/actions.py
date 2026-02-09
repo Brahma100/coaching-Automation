@@ -1,16 +1,140 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Parent, Student
+from app.models import Parent, ParentStudentMap, PendingAction, Student
 from app.schemas import ActionTokenCreateRequest, ActionTokenExecuteRequest
 from app.services.action_token_service import create_action_token, verify_and_consume_token
+from app.services.auth_service import validate_session_token
 from app.services.comms_service import queue_telegram_by_chat_id, send_fee_reminder
 from app.services.fee_service import build_upi_link
-from app.services.pending_action_service import create_pending_action, resolve_action
+from app.services.pending_action_service import create_pending_action, list_open_actions, resolve_action
 
 
 router = APIRouter(prefix='/actions', tags=['Actions'])
+
+
+class ActionResolvePayload(BaseModel):
+    action_id: int
+
+
+class RiskIgnorePayload(BaseModel):
+    note: str = ''
+
+
+def _require_teacher(request: Request):
+    token = request.cookies.get('auth_session')
+    session = validate_session_token(token)
+    if not session or session['role'] not in ('teacher', 'admin'):
+        raise HTTPException(status_code=401, detail='Unauthorized')
+    return session
+
+
+@router.get('/list-open')
+def list_open(request: Request, _: dict = Depends(_require_teacher), db: Session = Depends(get_db)):
+    rows = list_open_actions(db)
+    return [
+        {
+            'id': row.id,
+            'type': row.type,
+            'student_id': row.student_id,
+            'related_session_id': row.related_session_id,
+            'status': row.status,
+            'note': row.note,
+            'created_at': row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in rows
+    ]
+
+
+@router.get('/open')
+def open_alias(request: Request, _: dict = Depends(_require_teacher), db: Session = Depends(get_db)):
+    return list_open(request=request, _=_, db=db)
+
+
+@router.post('/resolve')
+def resolve_action_by_id(
+    payload: ActionResolvePayload,
+    request: Request,
+    _: dict = Depends(_require_teacher),
+    db: Session = Depends(get_db),
+):
+    try:
+        row = resolve_action(db, payload.action_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {'ok': True, 'action_id': row.id, 'status': row.status}
+
+
+@router.post('/risk/{action_id}/review')
+def review_risk_action(
+    action_id: int,
+    request: Request,
+    _: dict = Depends(_require_teacher),
+    db: Session = Depends(get_db),
+):
+    row = db.query(PendingAction).filter(PendingAction.id == action_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail='Pending action not found')
+    if row.type != 'student_risk':
+        raise HTTPException(status_code=400, detail='Action is not a student_risk item')
+    resolved = resolve_action(db, action_id)
+    return {'ok': True, 'action_id': resolved.id, 'status': resolved.status}
+
+
+@router.post('/risk/{action_id}/ignore')
+def ignore_risk_action(
+    action_id: int,
+    payload: RiskIgnorePayload,
+    request: Request,
+    _: dict = Depends(_require_teacher),
+    db: Session = Depends(get_db),
+):
+    row = db.query(PendingAction).filter(PendingAction.id == action_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail='Pending action not found')
+    if row.type != 'student_risk':
+        raise HTTPException(status_code=400, detail='Action is not a student_risk item')
+    note_suffix = (payload.note or '').strip()
+    if note_suffix:
+        row.note = f'{row.note}\nIgnored note: {note_suffix}'.strip()
+    row.status = 'resolved'
+    db.commit()
+    db.refresh(row)
+    return {'ok': True, 'action_id': row.id, 'status': row.status}
+
+
+@router.post('/risk/{action_id}/notify-parent')
+def notify_parent_for_risk_action(
+    action_id: int,
+    request: Request,
+    _: dict = Depends(_require_teacher),
+    db: Session = Depends(get_db),
+):
+    row = db.query(PendingAction).filter(PendingAction.id == action_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail='Pending action not found')
+    if row.type != 'student_risk':
+        raise HTTPException(status_code=400, detail='Action is not a student_risk item')
+    if not row.student_id:
+        raise HTTPException(status_code=400, detail='Risk action is missing student_id')
+
+    student = db.query(Student).filter(Student.id == row.student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail='Student not found')
+
+    parent_link = db.query(ParentStudentMap).filter(ParentStudentMap.student_id == student.id).first()
+    if not parent_link:
+        raise HTTPException(status_code=404, detail='No linked parent found for this student')
+
+    parent = db.query(Parent).filter(Parent.id == parent_link.parent_id).first()
+    if not parent or not parent.telegram_chat_id:
+        raise HTTPException(status_code=404, detail='Parent not found or missing telegram chat id')
+
+    message = f'Follow-up needed for {student.name}. Teacher flagged risk indicators for review.'
+    queue_telegram_by_chat_id(db, parent.telegram_chat_id, message, student_id=student.id)
+    return {'ok': True, 'action': 'notify-parent', 'student_id': student.id}
 
 
 @router.post('/token/create')

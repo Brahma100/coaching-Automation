@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     attendance_low_threshold: float = 0.75
     default_quiet_hours_start: str = '22:00'
     default_quiet_hours_end: str = '07:00'
+    auth_otp_expiry_minutes: int = 10
+    auth_session_expiry_hours: int = 12
+    auth_secret: str = 'change-me'
+    auth_otp_fallback_chat_id: str = ''
+    auth_admin_phone: str = ''
+    auth_enable_google_login: bool = False
+    auth_google_client_id: str = ''
+    daily_teacher_brief_time: str = '07:30'
+    attendance_auto_close_grace_minutes: int = 10
 
 
 settings = Settings()

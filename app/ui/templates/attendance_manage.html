@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Manage Attendance</h2>
+<p>Select batch/date/slot, then open the execution sheet.</p>
+{% if error == 'invalid-date' %}
+  <p class="notice notice-error">Invalid date format.</p>
+{% elif error == 'session-locked' %}
+  <p class="notice notice-error">Session already submitted and locked.</p>
+{% endif %}
+<form method="post" action="/ui/attendance/manage" class="form-inline">
+  <label for="batch_id">Batch</label>
+  <select id="batch_id" name="batch_id" onchange="window.location='/ui/attendance/manage?batch_id='+this.value+'&attendance_date={{ selected_date }}'">
+    {% for b in batches %}
+      <option value="{{ b.id }}" {% if selected_batch_id == b.id %}selected{% endif %}>{{ b.name }}</option>
+    {% endfor %}
+  </select>
+  <label for="attendance_date">Date</label>
+  <input id="attendance_date" type="date" name="attendance_date" value="{{ selected_date }}" required />
+  <label for="schedule_id">Time Slot</label>
+  <select id="schedule_id" name="schedule_id">
+    {% if schedules %}
+      {% for s in schedules %}
+        <option value="{{ s.id }}" {% if selected_schedule_id == s.id %}selected{% endif %}>
+          Weekday {{ s.weekday }} | {{ s.start_time }} | {{ s.duration_minutes }} min
+        </option>
+      {% endfor %}
+    {% else %}
+      <option value="">No schedule slot found</option>
+    {% endif %}
+  </select>
+  <button type="submit">Open Attendance Sheet</button>
+</form>
+{% endblock %}
