@@ -41,6 +41,52 @@ export async function fetchTodayBrief() {
   return data;
 }
 
+export async function fetchTeacherProfile() {
+  const { data } = await api.get(`${BACKEND}/api/teacher/profile`);
+  return data;
+}
+
+export async function updateTeacherProfile(payload) {
+  const { data } = await api.put(`${BACKEND}/api/teacher/profile`, payload);
+  return data;
+}
+
+export async function validateToken(token, sessionId, expectedType = '') {
+  const params = new URLSearchParams();
+  params.set('token', token || '');
+  params.set('session_id', String(sessionId));
+  if (expectedType) params.set('expected', expectedType);
+  const { data } = await api.get(`${BACKEND}/api/tokens/validate?${params.toString()}`);
+  return data;
+}
+
+export async function fetchSessionSummary(sessionId, token) {
+  const params = new URLSearchParams();
+  params.set('token', token || '');
+  const { data } = await api.get(`${BACKEND}/api/session/summary/${sessionId}?${params.toString()}`);
+  return data;
+}
+
+export async function fetchStudentMe() {
+  const { data } = await api.get(`${BACKEND}/api/student/me`);
+  return data;
+}
+
+export async function fetchStudentPreferences() {
+  const { data } = await api.get(`${BACKEND}/api/student/preferences`);
+  return data;
+}
+
+export async function updateStudentPreferences(payload) {
+  const { data } = await api.put(`${BACKEND}/api/student/preferences`, payload);
+  return data;
+}
+
+export async function fetchAdminOpsDashboard() {
+  const { data } = await api.get(`${BACKEND}/api/admin/ops-dashboard`);
+  return data;
+}
+
 export async function fetchStudents() {
   const { data } = await api.get(`${BACKEND}/students`);
   return data;
@@ -174,6 +220,11 @@ export async function resolveAction(actionId) {
   return data;
 }
 
+export async function resolveInboxAction(actionId, resolution_note = '') {
+  const { data } = await api.post(`${BACKEND}/api/inbox/actions/${actionId}/resolve`, { resolution_note });
+  return data;
+}
+
 export async function reviewRiskAction(actionId) {
   const { data } = await api.post(`${BACKEND}/actions/risk/${actionId}/review`, {});
   return data;
@@ -206,6 +257,12 @@ export async function fetchDashboardBundle() {
   ]);
 
   return { brief, students, fees, homework, actions, risk, batches };
+}
+
+export async function fetchTodayView(teacherId) {
+  const query = teacherId ? `?teacher_id=${encodeURIComponent(teacherId)}` : '';
+  const { data } = await api.get(`${BACKEND}/api/dashboard/today${query}`);
+  return data;
 }
 
 export default api;

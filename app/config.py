@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     telegram_api_base: str = 'https://api.telegram.org'
     enable_telegram_notifications: bool = True
     app_base_url: str = 'http://127.0.0.1:8000'
+    frontend_base_url: str = 'http://localhost:5173'
     default_upi_id: str = 'coach@upi'
     enable_sheets_backup: bool = False
     sheet_id: str = ''
@@ -28,6 +29,11 @@ class Settings(BaseSettings):
     auth_google_client_id: str = ''
     daily_teacher_brief_time: str = '07:30'
     attendance_auto_close_grace_minutes: int = 10
+    cache_backend: str = 'memory'
+    cache_redis_url: str | None = None
+    default_cache_ttl: int = 60
+    db_slow_query_ms: int = 100
+    metrics_slow_ms: int = 200
 
 
 settings = Settings()

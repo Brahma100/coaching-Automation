@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from enum import Enum
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -33,6 +33,111 @@ class Batch(Base):
     schedules: Mapped[list['BatchSchedule']] = relationship('BatchSchedule', back_populates='batch')
     student_links: Mapped[list['StudentBatchMap']] = relationship('StudentBatchMap', back_populates='batch')
     class_sessions: Mapped[list['ClassSession']] = relationship('ClassSession', back_populates='batch')
+    program_links: Mapped[list['BatchProgram']] = relationship('BatchProgram', back_populates='batch', cascade='all, delete-orphan')
+    board_links: Mapped[list['BatchBoard']] = relationship('BatchBoard', back_populates='batch', cascade='all, delete-orphan')
+    level_links: Mapped[list['BatchLevel']] = relationship('BatchLevel', back_populates='batch', cascade='all, delete-orphan')
+    subject_links: Mapped[list['BatchSubject']] = relationship('BatchSubject', back_populates='batch', cascade='all, delete-orphan')
+    programs: Mapped[list['Program']] = relationship('Program', secondary='batch_programs', back_populates='batches')
+    boards: Mapped[list['Board']] = relationship('Board', secondary='batch_boards', back_populates='batches')
+    levels: Mapped[list['ClassLevel']] = relationship('ClassLevel', secondary='batch_levels', back_populates='batches')
+    subjects: Mapped[list['Subject']] = relationship('Subject', secondary='batch_subjects', back_populates='batches')
+
+
+class Program(Base):
+    __tablename__ = 'programs'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    description: Mapped[str] = mapped_column(Text, default='')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    batch_links: Mapped[list['BatchProgram']] = relationship('BatchProgram', back_populates='program', cascade='all, delete-orphan')
+    batches: Mapped[list['Batch']] = relationship('Batch', secondary='batch_programs', back_populates='programs')
+
+
+class Board(Base):
+    __tablename__ = 'boards'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    shortcode: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    batch_links: Mapped[list['BatchBoard']] = relationship('BatchBoard', back_populates='board', cascade='all, delete-orphan')
+    batches: Mapped[list['Batch']] = relationship('Batch', secondary='batch_boards', back_populates='boards')
+
+
+class ClassLevel(Base):
+    __tablename__ = 'class_levels'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    min_grade: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_grade: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    batch_links: Mapped[list['BatchLevel']] = relationship('BatchLevel', back_populates='class_level', cascade='all, delete-orphan')
+    batches: Mapped[list['Batch']] = relationship('Batch', secondary='batch_levels', back_populates='levels')
+
+
+class Subject(Base):
+    __tablename__ = 'subjects'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(20), default='', index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    batch_links: Mapped[list['BatchSubject']] = relationship('BatchSubject', back_populates='subject', cascade='all, delete-orphan')
+    batches: Mapped[list['Batch']] = relationship('Batch', secondary='batch_subjects', back_populates='subjects')
+
+
+class BatchProgram(Base):
+    __tablename__ = 'batch_programs'
+    __table_args__ = (UniqueConstraint('batch_id', 'program_id', name='uq_batch_program_batch_program'),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
+    program_id: Mapped[int] = mapped_column(ForeignKey('programs.id'), index=True)
+
+    batch: Mapped['Batch'] = relationship('Batch', back_populates='program_links')
+    program: Mapped['Program'] = relationship('Program', back_populates='batch_links')
+
+
+class BatchBoard(Base):
+    __tablename__ = 'batch_boards'
+    __table_args__ = (UniqueConstraint('batch_id', 'board_id', name='uq_batch_board_batch_board'),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
+    board_id: Mapped[int] = mapped_column(ForeignKey('boards.id'), index=True)
+
+    batch: Mapped['Batch'] = relationship('Batch', back_populates='board_links')
+    board: Mapped['Board'] = relationship('Board', back_populates='batch_links')
+
+
+class BatchLevel(Base):
+    __tablename__ = 'batch_levels'
+    __table_args__ = (UniqueConstraint('batch_id', 'class_level_id', name='uq_batch_level_batch_class'),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
+    class_level_id: Mapped[int] = mapped_column(ForeignKey('class_levels.id'), index=True)
+
+    batch: Mapped['Batch'] = relationship('Batch', back_populates='level_links')
+    class_level: Mapped['ClassLevel'] = relationship('ClassLevel', back_populates='batch_links')
+
+
+class BatchSubject(Base):
+    __tablename__ = 'batch_subjects'
+    __table_args__ = (UniqueConstraint('batch_id', 'subject_id', name='uq_batch_subject_batch_subject'),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey('subjects.id'), index=True)
+
+    batch: Mapped['Batch'] = relationship('Batch', back_populates='subject_links')
+    subject: Mapped['Subject'] = relationship('Subject', back_populates='batch_links')
 
 
 class Student(Base):
@@ -42,7 +147,10 @@ class Student(Base):
     name: Mapped[str] = mapped_column(String(120))
     guardian_phone: Mapped[str] = mapped_column(String(20), default='')
     telegram_chat_id: Mapped[str] = mapped_column(String(40), default='')
-    batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'))
+    batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
+    enable_daily_digest: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    enable_homework_reminders: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    enable_motivation_messages: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
     batch: Mapped['Batch'] = relationship('Batch', back_populates='students')
     batch_links: Mapped[list['StudentBatchMap']] = relationship('StudentBatchMap', back_populates='student')
@@ -57,6 +165,9 @@ class Student(Base):
 
 class AttendanceRecord(Base):
     __tablename__ = 'attendance_records'
+    __table_args__ = (
+        Index('ix_attendance_records_student_date', 'student_id', 'attendance_date'),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     student_id: Mapped[int] = mapped_column(ForeignKey('students.id'))
@@ -152,6 +263,9 @@ class OfferRedemption(Base):
 
 class ClassSession(Base):
     __tablename__ = 'class_sessions'
+    __table_args__ = (
+        Index('ix_class_sessions_batch_scheduled_start', 'batch_id', 'scheduled_start'),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
@@ -245,13 +359,24 @@ class RuleConfig(Base):
 
 class PendingAction(Base):
     __tablename__ = 'pending_actions'
+    __table_args__ = (
+        Index('ix_pending_actions_status_teacher_due', 'status', 'teacher_id', 'due_at'),
+        Index('ix_pending_actions_teacher_status', 'teacher_id', 'status'),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     type: Mapped[str] = mapped_column(String(30), index=True)  # fee_followup|absence|homework|manual
+    action_type: Mapped[str] = mapped_column(String(40), default='', index=True)
     student_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     related_session_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    teacher_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    session_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default='open', index=True)  # open|resolved
     note: Mapped[str] = mapped_column(Text, default='')
+    due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolution_note: Mapped[str] = mapped_column(Text, default='')
+    escalation_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -276,6 +401,7 @@ class AuthUser(Base):
     otp_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255), default='')
     google_sub: Mapped[str] = mapped_column(String(255), default='', index=True)
+    notification_delete_minutes: Mapped[int] = mapped_column(Integer, default=15)
 
 
 class AllowedUser(Base):
@@ -299,12 +425,23 @@ class BackupLog(Base):
 
 class CommunicationLog(Base):
     __tablename__ = 'communication_logs'
+    __table_args__ = (
+        UniqueConstraint('teacher_id', 'session_id', 'notification_type', name='uq_comm_logs_teacher_session_type'),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     student_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    teacher_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    session_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     channel: Mapped[str] = mapped_column(String(20))
     message: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default='queued')
+    telegram_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    delete_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    notification_type: Mapped[str] = mapped_column(String(40), default='', index=True)
+    event_type: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    reference_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -335,3 +472,29 @@ class StudentRiskEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     student: Mapped['Student'] = relationship('Student', back_populates='risk_events')
+
+
+class TeacherTodaySnapshot(Base):
+    __tablename__ = 'teacher_today_snapshot'
+
+    teacher_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    date: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
+    data_json: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class AdminOpsSnapshot(Base):
+    __tablename__ = 'admin_ops_snapshot'
+
+    date: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
+    data_json: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class StudentDashboardSnapshot(Base):
+    __tablename__ = 'student_dashboard_snapshot'
+
+    student_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    date: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
+    data_json: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)

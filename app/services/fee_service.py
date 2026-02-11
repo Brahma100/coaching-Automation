@@ -1,10 +1,12 @@
-from datetime import date
+from datetime import date, datetime
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import FeeRecord, Student
 from app.services.comms_service import send_fee_reminder
+from app.services.inbox_automation import resolve_fee_actions_on_paid
+from app.services import snapshot_service
 
 
 def build_upi_link(student: Student, amount: float) -> str:
@@ -44,6 +46,18 @@ def mark_fee_paid(db: Session, fee_record_id: int, paid_amount: float):
     fee.paid_amount += paid_amount
     fee.is_paid = fee.paid_amount >= fee.amount
     db.commit()
+    if fee.is_paid:
+        resolve_fee_actions_on_paid(db, student_id=fee.student_id)
+
+    # CQRS-lite snapshots: best-effort refresh (never break the write path).
+    try:
+        today = datetime.utcnow().date()
+        snapshot_service.refresh_student_dashboard_snapshot(db, student_id=int(fee.student_id), day=today)
+        for teacher_id in snapshot_service.teacher_ids_for_student_today(db, student_id=int(fee.student_id), day=today):
+            snapshot_service.refresh_teacher_today_snapshot(db, teacher_id=teacher_id, day=today)
+        snapshot_service.refresh_admin_ops_snapshot(db, day=today)
+    except Exception:
+        pass
     return {'fee_record_id': fee.id, 'is_paid': fee.is_paid, 'paid_amount': fee.paid_amount}
 
 

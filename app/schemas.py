@@ -119,3 +119,65 @@ class RuleConfigUpsertRequest(BaseModel):
     reminder_grace_period_days: int = Field(default=0, ge=0, le=30)
     quiet_hours_start: str = '22:00'
     quiet_hours_end: str = '06:00'
+
+
+class ProgramCreate(BaseModel):
+    name: str
+    description: str = ''
+
+
+class ProgramRead(BaseModel):
+    id: int
+    name: str
+    description: str = ''
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class BoardCreate(BaseModel):
+    name: str
+    shortcode: str
+
+
+class BoardRead(BaseModel):
+    id: int
+    name: str
+    shortcode: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ClassLevelCreate(BaseModel):
+    name: str
+    min_grade: int | None = None
+    max_grade: int | None = None
+
+
+class ClassLevelRead(BaseModel):
+    id: int
+    name: str
+    min_grade: int | None = None
+    max_grade: int | None = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class SubjectCreate(BaseModel):
+    name: str
+    code: str | None = ''
+
+
+class SubjectRead(BaseModel):
+    id: int
+    name: str
+    code: str | None = ''
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

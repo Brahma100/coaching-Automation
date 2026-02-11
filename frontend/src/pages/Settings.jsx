@@ -2,7 +2,7 @@ import React from 'react';
 import { FiBell, FiCalendar, FiMoon, FiPhone, FiShield, FiSun, FiUser } from 'react-icons/fi';
 
 import useTheme from '../hooks/useTheme';
-import { fetchTodayBrief } from '../services/api';
+import { fetchTeacherProfile, fetchTodayBrief, updateTeacherProfile } from '../services/api';
 
 function formatDateTime(value) {
   if (!value) return 'Not available';
@@ -23,14 +23,19 @@ function Settings() {
   const [error, setError] = React.useState('');
   const [brief, setBrief] = React.useState(null);
   const [notificationsOn, setNotificationsOn] = React.useState(true);
+  const [profile, setProfile] = React.useState(null);
+  const [deleteMinutes, setDeleteMinutes] = React.useState(15);
+  const [savingProfile, setSavingProfile] = React.useState(false);
 
   React.useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const payload = await fetchTodayBrief();
+        const [briefPayload, profilePayload] = await Promise.all([fetchTodayBrief(), fetchTeacherProfile()]);
         if (mounted) {
-          setBrief(payload || null);
+          setBrief(briefPayload || null);
+          setProfile(profilePayload || null);
+          setDeleteMinutes(profilePayload?.notification_delete_minutes ?? 15);
           setError('');
         }
       } catch (err) {
@@ -45,6 +50,19 @@ function Settings() {
       mounted = false;
     };
   }, []);
+
+  const saveProfile = async () => {
+    setSavingProfile(true);
+    try {
+      const payload = await updateTeacherProfile({ notification_delete_minutes: Number(deleteMinutes) });
+      setProfile((prev) => ({ ...(prev || {}), notification_delete_minutes: payload.notification_delete_minutes }));
+      setError('');
+    } catch (err) {
+      setError(err?.response?.data?.detail || err?.message || 'Could not update profile');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
 
   return (
     <section className="space-y-4">
@@ -115,6 +133,29 @@ function Settings() {
                 <FiBell className="h-4 w-4" />
                 {notificationsOn ? 'Mute Alerts' : 'Enable Alerts'}
               </button>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Auto-delete (min)</p>
+              <p className="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">{deleteMinutes} minutes</p>
+              <div className="mt-3 flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={240}
+                  value={deleteMinutes}
+                  onChange={(event) => setDeleteMinutes(event.target.value)}
+                  className="w-24 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+                />
+                <button
+                  type="button"
+                  onClick={saveProfile}
+                  disabled={savingProfile}
+                  className="rounded-lg bg-[#2f7bf6] px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  Save
+                </button>
+              </div>
             </div>
           </div>
 

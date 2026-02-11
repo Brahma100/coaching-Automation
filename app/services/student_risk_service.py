@@ -4,7 +4,7 @@ import time
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import and_, inspect, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models import (
     AttendanceRecord,
@@ -18,6 +18,7 @@ from app.models import (
     StudentRiskProfile,
 )
 from app.services.pending_action_service import create_pending_action
+from app.services.student_automation_engine import send_risk_soft_warning
 
 
 logger = logging.getLogger(__name__)
@@ -250,6 +251,10 @@ def recompute_student_risk(db: Session, student: Student) -> dict:
                     related_session_id=None,
                     note=payload['reason_summary'],
                 )
+            try:
+                send_risk_soft_warning(db, student_id=student.id)
+            except Exception:
+                logger.exception('student_risk_soft_warning_failed', extra={'student_id': student.id})
     db.commit()
     return payload
 
@@ -291,7 +296,11 @@ def recompute_all_student_risk(db: Session) -> dict:
 
 
 def list_student_risk_profiles(db: Session, batch_id: int | None = None) -> list[dict]:
-    query = db.query(StudentRiskProfile, Student).join(Student, StudentRiskProfile.student_id == Student.id)
+    query = (
+        db.query(StudentRiskProfile)
+        .options(selectinload(StudentRiskProfile.student).joinedload(Student.batch))
+        .join(Student, StudentRiskProfile.student_id == Student.id)
+    )
     if batch_id is not None:
         query = query.join(
             StudentBatchMap,
@@ -310,20 +319,20 @@ def list_student_risk_profiles(db: Session, batch_id: int | None = None) -> list
     }
     return [
         {
-            'student_id': student.id,
-            'student_name': student.name,
-            'batch_id': student.batch_id,
-            'batch_name': student.batch.name if student.batch else '',
+            'student_id': (profile.student.id if profile.student else None),
+            'student_name': profile.student.name if profile.student else '',
+            'batch_id': profile.student.batch_id if profile.student else None,
+            'batch_name': profile.student.batch.name if profile.student and profile.student.batch else '',
             'risk_level': profile.risk_level,
             'final_risk_score': round(profile.final_risk_score, 2),
-            'reason_summary': notes_by_student.get(student.id, ''),
+            'reason_summary': notes_by_student.get((profile.student.id if profile.student else None), ''),
             'attendance_score': round(profile.attendance_score, 4),
             'homework_score': round(profile.homework_score, 4),
             'fee_score': round(profile.fee_score, 4),
             'test_score': round(profile.test_score, 4) if profile.test_score is not None else None,
             'last_computed_at': profile.last_computed_at.isoformat() if profile.last_computed_at else None,
         }
-        for profile, student in rows
+        for profile in rows
     ]
 
 

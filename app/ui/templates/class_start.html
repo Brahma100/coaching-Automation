@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Class Start</h2>
+<p>Session {{ session_row.id }} | Batch {{ session_row.batch_id }} | Subject {{ session_row.subject }}</p>
+<p>Scheduled: {{ session_row.scheduled_start }}</p>
+<p>
+  <a class="button-link" href="/ui/attendance/session/{{ session_row.id }}">Open Attendance Sheet</a>
+</p>
+{% endblock %}

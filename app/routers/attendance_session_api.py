@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.cache import cache
 from app.db import get_db
 from app.models import Batch, BatchSchedule, Role
 from app.schemas import AttendanceItem
@@ -120,11 +121,18 @@ def attendance_session_get_api(
     db: Session = Depends(get_db),
 ):
     role = None
+    token_type = None
     if token:
-        try:
-            payload = verify_token(db, token, expected_action_type='attendance-session')
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        payload = None
+        for candidate in ('attendance_open', 'attendance_review', 'attendance-session'):
+            try:
+                payload = verify_token(db, token, expected_action_type=candidate)
+                token_type = candidate
+                break
+            except ValueError:
+                continue
+        if not payload:
+            raise HTTPException(status_code=400, detail='Invalid token')
         if int(payload.get('session_id') or 0) != session_id:
             raise HTTPException(status_code=403, detail='Token does not match session')
         role = Role.TEACHER.value
@@ -133,6 +141,9 @@ def attendance_session_get_api(
         role = (auth_user.get('role') or '').lower()
 
     sheet = load_attendance_session_sheet(db, session_id)
+    can_edit = (not sheet['locked']) or role == Role.ADMIN.value
+    if token_type in ('attendance_open', 'attendance_review'):
+        can_edit = sheet['session'].status not in ('closed', 'missed')
     return {
         'session': {
             'id': sheet['session'].id,
@@ -144,7 +155,7 @@ def attendance_session_get_api(
         'attendance_date': sheet['attendance_date'].isoformat(),
         'rows': sheet['rows'],
         'locked': sheet['locked'],
-        'can_edit': (not sheet['locked']) or role == Role.ADMIN.value,
+        'can_edit': can_edit,
     }
 
 
@@ -157,14 +168,24 @@ def attendance_session_submit_api(
 ):
     role = Role.TEACHER.value
     teacher_id = 0
+    allow_edit_submitted = False
     if payload.token:
-        try:
-            token_payload = verify_and_consume_token(db, payload.token, expected_action_type='attendance-session')
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        token_payload = None
+        token_type = None
+        for candidate in ('attendance_open', 'attendance_review', 'attendance-session'):
+            try:
+                token_payload = verify_token(db, payload.token, expected_action_type=candidate)
+                token_type = candidate
+                break
+            except ValueError:
+                continue
+        if not token_payload:
+            raise HTTPException(status_code=400, detail='Invalid token')
         if int(token_payload.get('session_id') or 0) != session_id:
             raise HTTPException(status_code=403, detail='Token does not match session')
         teacher_id = int(token_payload.get('teacher_id') or 0)
+        if token_type in ('attendance_open', 'attendance_review'):
+            allow_edit_submitted = True
     else:
         auth_user = _require_teacher_or_admin(request)
         role = (auth_user.get('role') or '').lower()
@@ -177,9 +198,14 @@ def attendance_session_submit_api(
             records=[row.model_dump() for row in payload.records],
             actor_role=role,
             teacher_id=teacher_id,
+            allow_edit_submitted=allow_edit_submitted,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    cache.invalidate_prefix('today_view')
+    cache.invalidate_prefix('inbox')
+    cache.invalidate('admin_ops')
+    cache.invalidate_prefix('student_dashboard')
     return result

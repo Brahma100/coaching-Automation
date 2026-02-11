@@ -5,7 +5,9 @@ from datetime import datetime
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models import Batch, BatchSchedule, Student, StudentBatchMap
+from app.models import AuthUser, Batch, BatchSchedule, Student, StudentBatchMap
+from app.services.comms_service import queue_teacher_telegram
+from app.services.daily_teacher_brief_service import resolve_teacher_chat_id
 from app.services.batch_membership_service import (
     deactivate_student_batch_mapping,
     ensure_active_student_batch_mapping,
@@ -58,7 +60,15 @@ def _validate_no_overlap(
             raise ValueError('Schedule overlaps with existing slot for this batch and weekday')
 
 
-def create_batch(db: Session, *, name: str, subject: str, academic_level: str, active: bool = True) -> Batch:
+def create_batch(
+    db: Session,
+    *,
+    name: str,
+    subject: str,
+    academic_level: str,
+    active: bool = True,
+    actor: dict | None = None,
+) -> Batch:
     clean_name = (name or '').strip()
     if not clean_name:
         raise ValueError('Batch name is required')
@@ -75,6 +85,7 @@ def create_batch(db: Session, *, name: str, subject: str, academic_level: str, a
     db.add(row)
     db.commit()
     db.refresh(row)
+    _notify_batch_change(db, action='created', batch=row, actor=actor)
     return row
 
 
@@ -86,6 +97,7 @@ def update_batch(
     subject: str,
     academic_level: str,
     active: bool,
+    actor: dict | None = None,
 ) -> Batch:
     row = db.query(Batch).filter(Batch.id == batch_id).first()
     if not row:
@@ -108,20 +120,30 @@ def update_batch(
     row.active = bool(active)
     db.commit()
     db.refresh(row)
+    _notify_batch_change(db, action='updated', batch=row, actor=actor)
     return row
 
 
-def soft_delete_batch(db: Session, batch_id: int) -> Batch:
+def soft_delete_batch(db: Session, batch_id: int, actor: dict | None = None) -> Batch:
     row = db.query(Batch).filter(Batch.id == batch_id).first()
     if not row:
         raise ValueError('Batch not found')
     row.active = False
     db.commit()
     db.refresh(row)
+    _notify_batch_change(db, action='deleted', batch=row, actor=actor)
     return row
 
 
-def add_schedule(db: Session, batch_id: int, *, weekday: int, start_time: str, duration_minutes: int) -> BatchSchedule:
+def add_schedule(
+    db: Session,
+    batch_id: int,
+    *,
+    weekday: int,
+    start_time: str,
+    duration_minutes: int,
+    actor: dict | None = None,
+) -> BatchSchedule:
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
     if not batch:
         raise ValueError('Batch not found')
@@ -139,10 +161,19 @@ def add_schedule(db: Session, batch_id: int, *, weekday: int, start_time: str, d
     db.add(row)
     db.commit()
     db.refresh(row)
+    _notify_schedule_change(db, action='created', batch=batch, schedule=row, actor=actor)
     return row
 
 
-def update_schedule(db: Session, schedule_id: int, *, weekday: int, start_time: str, duration_minutes: int) -> BatchSchedule:
+def update_schedule(
+    db: Session,
+    schedule_id: int,
+    *,
+    weekday: int,
+    start_time: str,
+    duration_minutes: int,
+    actor: dict | None = None,
+) -> BatchSchedule:
     row = db.query(BatchSchedule).filter(BatchSchedule.id == schedule_id).first()
     if not row:
         raise ValueError('Schedule not found')
@@ -163,18 +194,134 @@ def update_schedule(db: Session, schedule_id: int, *, weekday: int, start_time: 
     row.duration_minutes = duration_minutes
     db.commit()
     db.refresh(row)
+    batch = db.query(Batch).filter(Batch.id == row.batch_id).first()
+    if batch:
+        _notify_schedule_change(db, action='updated', batch=batch, schedule=row, actor=actor)
     return row
 
 
-def delete_schedule(db: Session, schedule_id: int) -> None:
+def delete_schedule(db: Session, schedule_id: int, actor: dict | None = None) -> None:
     row = db.query(BatchSchedule).filter(BatchSchedule.id == schedule_id).first()
     if not row:
         raise ValueError('Schedule not found')
+    batch = db.query(Batch).filter(Batch.id == row.batch_id).first()
+    if batch:
+        _notify_schedule_change(db, action='deleted', batch=batch, schedule=row, actor=actor)
     db.delete(row)
     db.commit()
 
 
-def link_student_to_batch(db: Session, batch_id: int, student_id: int) -> StudentBatchMap:
+def _notify_membership_change(
+    db: Session,
+    *,
+    action: str,
+    batch: Batch,
+    student: Student,
+    actor: dict | None,
+) -> None:
+    if not actor:
+        return
+    teacher_id = int(actor.get('user_id') or 0)
+    teacher_phone = str(actor.get('phone') or '').strip()
+    if teacher_id <= 0 or not teacher_phone:
+        return
+    chat_id = resolve_teacher_chat_id(db, teacher_phone)
+    if not chat_id:
+        return
+
+    teacher = db.query(AuthUser).filter(AuthUser.id == teacher_id).first()
+    teacher_label = teacher.phone if teacher else teacher_phone
+    message = (
+        f"Batch membership updated\n"
+        f"Action: {action}\n"
+        f"Teacher: {teacher_label} (id={teacher_id})\n"
+        f"Student: {student.name} (id={student.id}, phone={student.guardian_phone})\n"
+        f"Batch: {batch.name} (id={batch.id}, subject={batch.subject}, level={batch.academic_level})"
+    )
+    queue_teacher_telegram(
+        db,
+        teacher_id=teacher_id,
+        chat_id=chat_id,
+        message=message,
+        batch_id=batch.id,
+        notification_type='batch_membership_change',
+        session_id=None,
+    )
+
+
+def _notify_batch_change(
+    db: Session,
+    *,
+    action: str,
+    batch: Batch,
+    actor: dict | None,
+) -> None:
+    if not actor:
+        return
+    teacher_id = int(actor.get('user_id') or 0)
+    teacher_phone = str(actor.get('phone') or '').strip()
+    if teacher_id <= 0 or not teacher_phone:
+        return
+    chat_id = resolve_teacher_chat_id(db, teacher_phone)
+    if not chat_id:
+        return
+    teacher = db.query(AuthUser).filter(AuthUser.id == teacher_id).first()
+    teacher_label = teacher.phone if teacher else teacher_phone
+    message = (
+        f"Batch updated\n"
+        f"Action: {action}\n"
+        f"Teacher: {teacher_label} (id={teacher_id})\n"
+        f"Batch: {batch.name} (id={batch.id}, subject={batch.subject}, level={batch.academic_level}, active={batch.active})"
+    )
+    queue_teacher_telegram(
+        db,
+        teacher_id=teacher_id,
+        chat_id=chat_id,
+        message=message,
+        batch_id=batch.id,
+        notification_type='batch_change',
+        session_id=None,
+    )
+
+
+def _notify_schedule_change(
+    db: Session,
+    *,
+    action: str,
+    batch: Batch,
+    schedule: BatchSchedule,
+    actor: dict | None,
+) -> None:
+    if not actor:
+        return
+    teacher_id = int(actor.get('user_id') or 0)
+    teacher_phone = str(actor.get('phone') or '').strip()
+    if teacher_id <= 0 or not teacher_phone:
+        return
+    chat_id = resolve_teacher_chat_id(db, teacher_phone)
+    if not chat_id:
+        return
+    teacher = db.query(AuthUser).filter(AuthUser.id == teacher_id).first()
+    teacher_label = teacher.phone if teacher else teacher_phone
+    message = (
+        f"Batch schedule updated\n"
+        f"Action: {action}\n"
+        f"Teacher: {teacher_label} (id={teacher_id})\n"
+        f"Batch: {batch.name} (id={batch.id}, subject={batch.subject}, level={batch.academic_level})\n"
+        f"Schedule: id={schedule.id}, weekday={schedule.weekday}, start={schedule.start_time}, duration={schedule.duration_minutes}m"
+    )
+    queue_teacher_telegram(
+        db,
+        teacher_id=teacher_id,
+        chat_id=chat_id,
+        message=message,
+        batch_id=batch.id,
+        notification_type='batch_schedule_change',
+        session_id=None,
+    )
+
+
+def link_student_to_batch(db: Session, batch_id: int, student_id: int, actor: dict | None = None) -> StudentBatchMap:
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
     if not batch:
         raise ValueError('Batch not found')
@@ -182,13 +329,18 @@ def link_student_to_batch(db: Session, batch_id: int, student_id: int) -> Studen
     if not student:
         raise ValueError('Student not found')
     mapping = ensure_active_student_batch_mapping(db, student_id=student_id, batch_id=batch_id)
+    _notify_membership_change(db, action='linked', batch=batch, student=student, actor=actor)
     return mapping
 
 
-def unlink_student_from_batch(db: Session, batch_id: int, student_id: int) -> StudentBatchMap:
+def unlink_student_from_batch(db: Session, batch_id: int, student_id: int, actor: dict | None = None) -> StudentBatchMap:
     mapping = deactivate_student_batch_mapping(db, student_id=student_id, batch_id=batch_id)
     if not mapping:
         raise ValueError('Active student-batch mapping not found')
+    batch = db.query(Batch).filter(Batch.id == batch_id).first()
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if batch and student:
+        _notify_membership_change(db, action='unlinked', batch=batch, student=student, actor=actor)
     return mapping
 
 

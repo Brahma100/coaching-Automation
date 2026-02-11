@@ -5,11 +5,13 @@ import {
   FiBell,
   FiCalendar,
   FiBookOpen,
+  FiClock,
   FiGrid,
   FiHome,
   FiLogOut,
   FiMoon,
   FiMenu,
+  FiAlertTriangle,
   FiUsers,
   FiSun,
   FiSearch,
@@ -21,17 +23,9 @@ import {
 } from 'react-icons/fi';
 import { HiOutlineUserGroup } from 'react-icons/hi';
 
+import useRole from '../hooks/useRole';
 import { logout } from '../services/api';
 import useTheme from '../hooks/useTheme';
-
-const primaryMenu = [
-  { to: '/dashboard', label: 'Dashboard', icon: FiGrid },
-  { to: '/attendance', label: 'Manage Attendance', icon: FiBookOpen },
-  { to: '/students', label: 'Manage Students', icon: FiUserCheck },
-  { to: '/batches', label: 'Manage Batch', icon: FiCalendar },
-  { to: '/risk', label: 'Skill Progress', icon: FiBarChart2 },
-  { to: '/actions', label: 'Remove Class', icon: FiUserX }
-];
 
 const profileMenu = [
   { to: '/settings', label: 'My Profile', icon: FiUser },
@@ -43,6 +37,7 @@ function DashboardLayout() {
   const { isDark, toggleTheme } = useTheme();
   const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false);
   const [userMenuOpen, setUserMenuOpen] = React.useState(false);
+  const { isAdmin } = useRole();
   const userMenuRef = React.useRef(null);
 
   const onLogout = async () => {
@@ -65,6 +60,22 @@ function DashboardLayout() {
     document.addEventListener('mousedown', onDocClick);
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
+
+  const primaryMenu = React.useMemo(() => {
+    const base = [
+      { to: '/today', label: 'Today View', icon: FiClock },
+      { to: '/dashboard', label: 'Dashboard', icon: FiGrid },
+      { to: '/attendance', label: 'Manage Attendance', icon: FiBookOpen },
+      { to: '/students', label: 'Manage Students', icon: FiUserCheck },
+      { to: '/batches', label: 'Manage Batch', icon: FiCalendar },
+      { to: '/risk', label: 'Skill Progress', icon: FiBarChart2 },
+      { to: '/actions', label: 'Pending Actions', icon: FiUserX }
+    ];
+    if (isAdmin) {
+      base.splice(2, 0, { to: '/admin/ops', label: 'Admin Ops', icon: FiAlertTriangle });
+    }
+    return base;
+  }, [isAdmin]);
 
   const renderSidebarContent = () => (
     <>

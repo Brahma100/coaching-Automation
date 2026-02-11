@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.services.attendance_service import get_attendance_for_batch_today, submit_attendance
 from app.services.class_session_resolver import is_session_locked, resolve_or_create_class_session
 from app.services.class_session_service import get_session
+from app.services import snapshot_service
 
 
 def resolve_web_attendance_session(
@@ -47,13 +48,14 @@ def submit_attendance_for_session(
     records: list[dict],
     actor_role: str,
     teacher_id: int = 0,
+    allow_edit_submitted: bool = False,
 ) -> dict:
     session = get_session(db, session_id)
     if not session:
         raise ValueError('Class session not found')
     if session.status in ('closed', 'missed'):
         raise ValueError('Attendance window closed for this class.')
-    if is_session_locked(session) and actor_role != 'admin':
+    if is_session_locked(session) and actor_role != 'admin' and not allow_edit_submitted:
         raise PermissionError('Session already submitted and locked')
 
     result = submit_attendance(
@@ -73,4 +75,16 @@ def submit_attendance_for_session(
         refreshed.status = 'submitted'
         refreshed.actual_start = refreshed.actual_start or datetime.utcnow()
         db.commit()
+
+    # CQRS-lite snapshots: best-effort refresh (never break the write path).
+    try:
+        actor_teacher_id = int((refreshed.teacher_id if refreshed else None) or teacher_id or 0)
+        snapshot_service.refresh_teacher_today_snapshot(db, teacher_id=actor_teacher_id)
+        snapshot_service.refresh_admin_ops_snapshot(db)
+        student_ids = {int(item.get('student_id') or 0) for item in records}
+        for student_id in student_ids:
+            if student_id > 0:
+                snapshot_service.refresh_student_dashboard_snapshot(db, student_id=student_id)
+    except Exception:
+        pass
     return result

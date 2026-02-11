@@ -42,6 +42,152 @@ Risk is advisory, not disciplinary.
 
 Docs: `/docs`, `/redoc`; UI: `/ui/dashboard`
 
+## Frontend URL (React)
+All Telegram notifications link to the React frontend, not `/ui/*` routes.
+Set this once in `.env`:
+`FRONTEND_BASE_URL=http://localhost:5173`
+Later replace with your Cloudflare Tunnel domain (no code changes).
+
+## Token Deep Links (React)
+Public token routes (no login required when token is valid):
+1. `/attendance/session/:sessionId?token=...`
+2. `/attendance/review/:sessionId?token=...`
+3. `/class/start/:sessionId?token=...`
+4. `/session/summary/:sessionId?token=...`
+
+Backend validation endpoint:
+`GET /api/tokens/validate?token=...&session_id=...&expected=attendance_open`
+
+Expired or invalid tokens show a friendly message in the React app.
+
+## Notification Lifecycle
+1. Class start notification: sent 15 minutes before class.
+2. Link target: React attendance route with a time-bound token.
+3. Auto-delete: at class start time or teacher preference (whichever is earlier).
+4. Attendance submitted: sends a single review/edit link.
+5. Review window: closes at class end + 10 minutes (token expiry + auto-delete).
+
+## Notification Dedup Policy
+Teacher Telegram notifications are deduplicated per event type, not just per teacher or session.
+Unique key: `(teacher_id, session_id, notification_type)`.
+This allows multiple event types (e.g., `class_start`, `attendance_open`, `attendance_submitted`) to be sent for the same session while suppressing true duplicates.
+
+## Post-Class Automation Engine
+Post-Class Automation runs after attendance is submitted or auto-closed.
+It evaluates rules and triggers contextual actions without spamming Telegram.
+
+Rules:
+1. Attendance completeness (unmarked students).
+2. Absentee detection (Absent/Late).
+3. Fee context (unpaid fees for Present students).
+4. Risk indicators (frequent absence / low streak).
+5. Workload safety: suppress teacher notification if no issues.
+
+Actions:
+1. Teacher summary notification (one per session):
+   - Message links to `/session/summary/{session_id}` with `session_summary` token.
+   - Dedup by `(teacher_id, session_id, notification_type=post_class_summary)`.
+2. Student attendance notification (one per student per session).
+3. Silent intelligence: flags visible in summary UI only (no chat).
+
+Why some info is UI-only:
+Sensitive or low-signal items (fee due + present, risk indicators) are shown in the summary UI to avoid chat fatigue.
+
+## Teacher Inbox Automation
+Inbox Automation is the primary work queue. Telegram is only used for overdue nudges.
+
+Flow:
+EVENT → CREATE ACTION → WAIT → ESCALATE → RESOLVE
+
+Standard action types:
+1. `review_session_summary`
+2. `follow_up_absentee`
+3. `follow_up_fee_due`
+4. `attendance_missed`
+5. `homework_not_reviewed`
+
+Escalation:
+1. Overdue actions trigger a single Telegram nudge.
+2. Quiet hours are respected.
+3. Each action is escalated only once.
+
+Resolution:
+1. Opening session summary auto-resolves `review_session_summary`.
+2. Fees marked paid auto-resolve `follow_up_fee_due`.
+3. No Telegram on resolve (silent success).
+
+## Today View Dashboard
+The Today View is an action-first command center answering: "What do I need to do TODAY?"
+
+Sections (strict order):
+1. 🔴 Overdue Actions (red, oldest first, one-click resolve).
+2. 🟡 Due Today (upcoming deadlines).
+3. 📘 Today’s Classes (attendance state + quick links).
+4. ⚠ Key Flags (silent intelligence: fee due present, high risk, repeated absences).
+5. ✅ Completed Today (collapsible).
+
+Why notifications are minimal:
+Today View surfaces tasks without spamming Telegram. Escalations happen only when tasks are overdue.
+
+Inbox vs Today View:
+- Inbox: the authoritative work queue and lifecycle (create → wait → escalate → resolve).
+- Today View: a daily action lens that prioritizes what to do now.
+
+## Admin Ops Dashboard (Read-Only)
+The Admin Ops Dashboard is a real-time operational overview across all teachers, batches, and automations.
+It answers: where is the system blocked, who needs attention, and which automations are stale.
+
+Purpose vs Today View:
+1. Today View = teacher/admin action list for a single day.
+2. Admin Ops = cross-system operational health (bottlenecks, drift, automation gaps).
+
+Safety:
+1. Read-only by design (no state changes, no notifications).
+2. All actions are links to existing flows.
+3. Admin routes are guarded in the frontend (navigation visibility + AdminProtectedRoute).
+4. Frontend guards are UX + safety only; backend access control still applies.
+
+Routes:
+1. React UI: `/admin/ops`
+2. API: `GET /api/admin/ops-dashboard` (admin role required; response cached ~30-60 seconds)
+
+## Caching Policy (Read-Heavy Views)
+Read-heavy aggregated views use safe TTL caching with explicit invalidation on writes.
+
+Rules:
+1. Reads may be cached for short TTL (default ~60s).
+2. Any write handler that can affect a cached view explicitly invalidates impacted keys/prefixes (no stale-after-write).
+3. Read endpoints accept `?bypass_cache=true` to compute fresh and skip writing to cache (useful immediately after mutations).
+
+Key patterns (examples):
+1. `today_view:{role}:{scope}:{yyyy-mm-dd}`
+2. `admin_ops`
+3. `inbox:{teacher_id}`
+4. `student_dashboard:{student_id}`
+
+Note: frontend caching is UX only; backend auth still enforces access.
+
+## Student Automation Layer
+Low-noise automation to keep students informed without spam.
+
+Principles:
+1. Max 1–2 Telegram messages per day per student.
+2. Prefer digests over individual pings.
+3. No teacher/admin-only insights exposed to students.
+
+Automations:
+1. Attendance feedback per session (`student_attendance`).
+2. Homework assigned + due tomorrow reminders.
+3. Nightly daily digest (only if something changed).
+4. Weekly motivation (positive-only).
+5. Risk soft-warning (gentle, no fee/admin language).
+
+Opt-out:
+Students can toggle:
+- `enable_daily_digest`
+- `enable_homework_reminders`
+- `enable_motivation_messages`
+
 ## Login Flow (OTP)
 1. Open `/ui/login`.
 2. Enter phone and click **Request OTP**.

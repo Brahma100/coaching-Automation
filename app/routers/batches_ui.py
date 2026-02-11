@@ -85,7 +85,7 @@ def batches_add_submit(
     name: str = Form(...),
     subject: str = Form('General'),
     academic_level: str = Form(''),
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
@@ -94,6 +94,7 @@ def batches_add_submit(
             name=name,
             subject=subject,
             academic_level=academic_level,
+            actor=session,
         )
         return RedirectResponse(url='/ui/batches', status_code=303)
     except ValueError as exc:
@@ -139,7 +140,7 @@ def batch_schedule_add_submit(
     weekday: int = Form(...),
     start_time: str = Form(...),
     duration_minutes: int = Form(...),
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
@@ -149,6 +150,7 @@ def batch_schedule_add_submit(
             weekday=weekday,
             start_time=start_time,
             duration_minutes=duration_minutes,
+            actor=session,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -159,11 +161,11 @@ def batch_schedule_add_submit(
 def batch_schedule_delete_submit(
     batch_id: int,
     schedule_id: int,
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
-        delete_schedule(db, schedule_id)
+        delete_schedule(db, schedule_id, actor=session)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return RedirectResponse(url=f'/ui/batches/{batch_id}', status_code=303)
@@ -173,11 +175,11 @@ def batch_schedule_delete_submit(
 def batch_student_link_submit(
     batch_id: int,
     student_id: int = Form(...),
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
-        link_student_to_batch(db, batch_id=batch_id, student_id=student_id)
+        link_student_to_batch(db, batch_id=batch_id, student_id=student_id, actor=session)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return RedirectResponse(url=f'/ui/batches/{batch_id}', status_code=303)
@@ -187,11 +189,11 @@ def batch_student_link_submit(
 def batch_student_unlink_submit(
     batch_id: int,
     student_id: int,
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
-        unlink_student_from_batch(db, batch_id=batch_id, student_id=student_id)
+        unlink_student_from_batch(db, batch_id=batch_id, student_id=student_id, actor=session)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return RedirectResponse(url=f'/ui/batches/{batch_id}', status_code=303)
@@ -203,7 +205,7 @@ def batches_create_legacy(
     request: Request,
     name: str = Form(...),
     start_time: str = Form('07:00'),
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
@@ -212,6 +214,7 @@ def batches_create_legacy(
             name=name,
             subject=name,
             academic_level='',
+            actor=session,
         )
         if start_time:
             add_schedule(
@@ -262,7 +265,7 @@ def api_list_batches(
 def api_create_batch(
     payload: BatchCreatePayload,
     request: Request,
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
@@ -271,6 +274,7 @@ def api_create_batch(
             name=payload.name,
             subject=payload.subject,
             academic_level=payload.academic_level,
+            actor=session,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -282,7 +286,7 @@ def api_update_batch(
     batch_id: int,
     payload: BatchUpdatePayload,
     request: Request,
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
@@ -293,6 +297,7 @@ def api_update_batch(
             subject=payload.subject,
             academic_level=payload.academic_level,
             active=payload.active,
+            actor=session,
         )
     except ValueError as exc:
         message = str(exc)
@@ -305,11 +310,11 @@ def api_update_batch(
 def api_soft_delete_batch(
     batch_id: int,
     request: Request,
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
-        row = soft_delete_batch(db, batch_id)
+        row = soft_delete_batch(db, batch_id, actor=session)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {'id': row.id, 'active': row.active}
@@ -320,7 +325,7 @@ def api_add_schedule(
     batch_id: int,
     payload: BatchSchedulePayload,
     request: Request,
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
@@ -330,6 +335,7 @@ def api_add_schedule(
             weekday=payload.weekday,
             start_time=payload.start_time,
             duration_minutes=payload.duration_minutes,
+            actor=session,
         )
     except ValueError as exc:
         message = str(exc)
@@ -349,7 +355,7 @@ def api_update_schedule(
     schedule_id: int,
     payload: BatchSchedulePayload,
     request: Request,
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
@@ -359,6 +365,7 @@ def api_update_schedule(
             weekday=payload.weekday,
             start_time=payload.start_time,
             duration_minutes=payload.duration_minutes,
+            actor=session,
         )
     except ValueError as exc:
         message = str(exc)
@@ -377,11 +384,11 @@ def api_update_schedule(
 def api_delete_schedule(
     schedule_id: int,
     request: Request,
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
-        delete_schedule(db, schedule_id)
+        delete_schedule(db, schedule_id, actor=session)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {'ok': True}
@@ -392,11 +399,11 @@ def api_link_student_to_batch(
     batch_id: int,
     payload: StudentLinkPayload,
     request: Request,
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
-        row = link_student_to_batch(db, batch_id=batch_id, student_id=payload.student_id)
+        row = link_student_to_batch(db, batch_id=batch_id, student_id=payload.student_id, actor=session)
     except ValueError as exc:
         message = str(exc)
         status_code = 404 if message in ('Batch not found', 'Student not found') else 400
@@ -425,11 +432,11 @@ def api_unlink_student_from_batch(
     batch_id: int,
     student_id: int,
     request: Request,
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
     try:
-        row = unlink_student_from_batch(db, batch_id=batch_id, student_id=student_id)
+        row = unlink_student_from_batch(db, batch_id=batch_id, student_id=student_id, actor=session)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 
 from app.config import settings
 from app.models import AttendanceRecord, ClassSession, FeeRecord, Homework, HomeworkSubmission, Parent, ParentStudentMap, PendingAction, Student, StudentBatchMap, StudentRiskProfile
@@ -114,11 +114,18 @@ def get_absent_students_summary(db, teacher_id: int, day: date | None = None) ->
 def get_pending_actions_summary(db, teacher_id: int) -> dict:
     rows = (
         db.query(PendingAction)
-        .join(ClassSession, ClassSession.id == PendingAction.related_session_id, isouter=True)
+        .join(
+            ClassSession,
+            or_(
+                ClassSession.id == PendingAction.session_id,
+                ClassSession.id == PendingAction.related_session_id,
+            ),
+            isouter=True,
+        )
         .filter(
             and_(
                 PendingAction.status == 'open',
-                ClassSession.teacher_id == teacher_id,
+                or_(PendingAction.teacher_id == teacher_id, ClassSession.teacher_id == teacher_id),
             )
         )
         .order_by(PendingAction.created_at.desc())
@@ -127,7 +134,7 @@ def get_pending_actions_summary(db, teacher_id: int) -> dict:
     actions = [
         {
             'action_id': row.id,
-            'type': row.type,
+            'type': row.action_type or row.type,
             'student_id': row.student_id,
             'note': row.note,
             'created_at': row.created_at.isoformat(),

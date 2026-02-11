@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from app.cache import cache, cache_key
 from app.db import get_db
 from app.models import Parent, ParentStudentMap, PendingAction, Student
 from app.schemas import ActionTokenCreateRequest, ActionTokenExecuteRequest
@@ -64,6 +65,7 @@ def resolve_action_by_id(
         row = resolve_action(db, payload.action_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    _invalidate_action_caches(request, teacher_id=row.teacher_id)
     return {'ok': True, 'action_id': row.id, 'status': row.status}
 
 
@@ -80,6 +82,7 @@ def review_risk_action(
     if row.type != 'student_risk':
         raise HTTPException(status_code=400, detail='Action is not a student_risk item')
     resolved = resolve_action(db, action_id)
+    _invalidate_action_caches(request, teacher_id=row.teacher_id)
     return {'ok': True, 'action_id': resolved.id, 'status': resolved.status}
 
 
@@ -102,6 +105,7 @@ def ignore_risk_action(
     row.status = 'resolved'
     db.commit()
     db.refresh(row)
+    _invalidate_action_caches(request, teacher_id=row.teacher_id)
     return {'ok': True, 'action_id': row.id, 'status': row.status}
 
 
@@ -134,6 +138,7 @@ def notify_parent_for_risk_action(
 
     message = f'Follow-up needed for {student.name}. Teacher flagged risk indicators for review.'
     queue_telegram_by_chat_id(db, parent.telegram_chat_id, message, student_id=student.id)
+    _invalidate_action_caches(request, teacher_id=row.teacher_id)
     return {'ok': True, 'action': 'notify-parent', 'student_id': student.id}
 
 
@@ -229,7 +234,23 @@ def mark_resolved(payload: ActionTokenExecuteRequest, db: Session = Depends(get_
     if not action_id:
         raise HTTPException(status_code=400, detail='Missing pending_action_id in token payload')
     row = resolve_action(db, action_id)
+    cache.invalidate_prefix('today_view')
+    cache.invalidate_prefix('inbox')
+    cache.invalidate('admin_ops')
     return {'ok': True, 'action': 'mark-resolved', 'pending_action_id': row.id}
+
+
+def _invalidate_action_caches(request: Request, *, teacher_id: int | None = None) -> None:
+    try:
+        session = validate_session_token(request.cookies.get('auth_session'))
+    except Exception:
+        session = None
+    cache.invalidate_prefix('today_view')
+    if teacher_id:
+        cache.invalidate(cache_key('inbox', int(teacher_id)))
+    else:
+        cache.invalidate_prefix('inbox')
+    cache.invalidate('admin_ops')
 
 
 @router.get('/mark-resolved')

@@ -12,6 +12,11 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
 
+def load_token_row(db: Session, token: str) -> ActionToken | None:
+    token_hash = _hash_token(token)
+    return db.query(ActionToken).filter(ActionToken.token_hash == token_hash).first()
+
+
 def create_action_token(db: Session, action_type: str, payload: dict, ttl_minutes: int = 30):
     raw = secrets.token_urlsafe(24)
     token_hash = _hash_token(raw)

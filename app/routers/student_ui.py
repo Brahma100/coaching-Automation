@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
+from app.models import Student
 from app.services.student_portal_service import (
     get_student_dashboard,
     list_student_attendance,
@@ -41,6 +43,26 @@ def student_dashboard_page(
             'data': data,
         },
     )
+
+
+@router.post('/preferences')
+def update_preferences(
+    request: Request,
+    auth: dict = Depends(_require_student),
+    db: Session = Depends(get_db),
+    enable_daily_digest: str | None = Form(default=None),
+    enable_homework_reminders: str | None = Form(default=None),
+    enable_motivation_messages: str | None = Form(default=None),
+):
+    student = auth['student']
+    row = db.query(Student).filter(Student.id == student.id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail='Student not found')
+    row.enable_daily_digest = bool(enable_daily_digest)
+    row.enable_homework_reminders = bool(enable_homework_reminders)
+    row.enable_motivation_messages = bool(enable_motivation_messages)
+    db.commit()
+    return RedirectResponse(url='/ui/student/dashboard', status_code=303)
 
 
 @router.get('/attendance')

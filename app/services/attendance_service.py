@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.models import AttendanceRecord, Batch, ClassSession, Student
 from app.services.batch_membership_service import list_active_student_ids_for_batch
 from app.services.post_class_pipeline import run_post_class_pipeline
+from app.services.post_class_automation_engine import run_post_class_automation
 
 
 def get_attendance_for_batch_today(db: Session, batch_id: int, target_date: date):
@@ -82,5 +83,11 @@ def submit_attendance(
         topic_planned=topic_planned,
         topic_completed=topic_completed,
     )
+    try:
+        session_id = pipeline_result.get('class_summary', {}).get('class_session_id')
+        if session_id:
+            run_post_class_automation(db, session_id=session_id, trigger_source='manual_submit')
+    except Exception:
+        pass
 
     return {'updated_records': len(created), **pipeline_result}

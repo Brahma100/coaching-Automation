@@ -3,10 +3,8 @@ from datetime import date
 
 from sqlalchemy.orm import Session
 
-from app.models import FeeRecord, Student
-from app.services.pending_action_service import create_pending_action
+from app.models import FeeRecord
 from app.services.class_session_service import get_or_create_session_for_attendance
-from app.services.comms_service import notify_attendance_status
 from app.services.parent_service import parent_notifications_from_rules
 from app.services.rule_config_service import get_effective_rule_config
 
@@ -84,42 +82,6 @@ def run_post_class_pipeline(
     if summary['absent_count'] >= rules['absence_streak_threshold']:
         teacher_flags.append('high_absence_threshold_reached')
 
-    for rec in records:
-        student = db.query(Student).filter(Student.id == rec.student_id).first()
-        if student:
-            notify_attendance_status(db, student, rec.status, str(attendance_date), rec.comment)
-
-    created_action_ids = []
-    for student_id in absent_ids:
-        row = create_pending_action(
-            db,
-            action_type='absence',
-            student_id=student_id,
-            related_session_id=session.id,
-            note=f'Absent on {attendance_date}',
-        )
-        created_action_ids.append(row.id)
-
-    for student_id in unpaid_present_ids:
-        row = create_pending_action(
-            db,
-            action_type='fee_followup',
-            student_id=student_id,
-            related_session_id=session.id,
-            note='Present with unpaid fees',
-        )
-        created_action_ids.append(row.id)
-
-    for student_id in late_ids:
-        row = create_pending_action(
-            db,
-            action_type='homework',
-            student_id=student_id,
-            related_session_id=session.id,
-            note='Late attendance; verify homework completion',
-        )
-        created_action_ids.append(row.id)
-
     parent_notifications_from_rules(
         db,
         batch_id=batch_id,
@@ -136,7 +98,7 @@ def run_post_class_pipeline(
             'present_count': len(present_ids),
             'absent_count': len(absent_ids),
             'late_count': len(late_ids),
-            'pending_actions_created': len(set(created_action_ids)),
+            'pending_actions_created': 0,
         },
     )
 
@@ -145,6 +107,6 @@ def run_post_class_pipeline(
         'teacher_notifications': teacher_flags,
         'student_notifications': len(records),
         'parent_notifications_rules_applied': True,
-        'pending_action_ids': sorted(set(created_action_ids)),
+        'pending_action_ids': [],
         'rules': rules,
     }

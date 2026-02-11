@@ -44,8 +44,8 @@ def resolve_or_create_class_session(
     source: str = 'web',
     teacher_id: int = 0,
 ) -> tuple[ClassSession, bool]:
-    if source not in ('telegram', 'web'):
-        raise ValueError('source must be telegram or web')
+    if source not in ('telegram', 'web', 'system'):
+        raise ValueError('source must be telegram, web, or system')
 
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
     if not batch:

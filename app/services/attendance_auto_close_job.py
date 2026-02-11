@@ -13,6 +13,8 @@ from app.services.comms_service import send_telegram_message
 from app.services.daily_teacher_brief_service import resolve_teacher_chat_id
 from app.services.pending_action_service import create_pending_action
 from app.services.post_class_pipeline import run_post_class_pipeline
+from app.services.post_class_automation_engine import run_post_class_automation
+from app.services import snapshot_service
 
 
 logger = logging.getLogger(__name__)
@@ -94,6 +96,10 @@ def auto_close_attendance_sessions(db: Session, grace_minutes: int | None = None
                 )
             except Exception:
                 logger.exception('auto_close_pipeline_failed session_id=%s', session.id)
+            try:
+                run_post_class_automation(db, session_id=session.id, trigger_source='auto_close')
+            except Exception:
+                logger.exception('auto_close_automation_engine_failed session_id=%s', session.id)
 
         if has_attendance:
             session.status = 'closed'
@@ -104,15 +110,28 @@ def auto_close_attendance_sessions(db: Session, grace_minutes: int | None = None
             session.closed_at = now
             create_pending_action(
                 db=db,
-                action_type='manual',
+                action_type='attendance_missed',
                 student_id=None,
                 related_session_id=session.id,
+                teacher_id=session.teacher_id or None,
+                session_id=session.id,
+                due_at=now,
                 note=f'Attendance missed for session {session.id} ({session.scheduled_start.date()})',
             )
             _notify_teacher_missed_session(db, session)
             missed_count += 1
 
         db.commit()
+        # CQRS-lite snapshots: best-effort refresh (never break the scheduler job).
+        try:
+            if session.teacher_id:
+                snapshot_service.refresh_teacher_today_snapshot(db, teacher_id=int(session.teacher_id))
+            snapshot_service.refresh_admin_ops_snapshot(db)
+            if has_attendance:
+                for rec in records:
+                    snapshot_service.refresh_student_dashboard_snapshot(db, student_id=int(rec.student_id))
+        except Exception:
+            pass
 
     return {
         'inspected': inspected,

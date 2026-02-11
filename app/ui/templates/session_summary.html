@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Session Summary</h2>
+<p>Batch: {{ session_row.batch_id }} | Subject: {{ session_row.subject }} | Date: {{ attendance_date }}</p>
+
+<h3>Attendance Details</h3>
+<table class="data-table">
+  <tr>
+    <th>Student</th>
+    <th>Status</th>
+    <th>Comment</th>
+    <th>Fee Due</th>
+    <th>Risk</th>
+    <th>Actions</th>
+  </tr>
+  {% for row in rows %}
+  <tr>
+    <td>{{ row.student_name }}</td>
+    <td>{{ row.status }}</td>
+    <td>{{ row.comment or '-' }}</td>
+    <td>{{ row.fee_due }}</td>
+    <td>{{ row.risk_level }}{% if row.risk_score %} ({{ row.risk_score }}){% endif %}</td>
+    <td>
+      <a class="button-link" href="{{ row.notify_parent_url }}">Notify Parent</a>
+      <a class="button-link" href="{{ row.fee_reminder_url }}">Send Fee Reminder</a>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6">No attendance records found.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

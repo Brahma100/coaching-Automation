@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { FiMoon, FiSun } from 'react-icons/fi';
 
 import boyReading from '../assets/boy-reading.png';
@@ -8,6 +8,7 @@ import { googleLogin, loginPassword, requestOtp, verifyOtp } from '../services/a
 
 function Login() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { isDark, toggleTheme } = useTheme();
   const [mode, setMode] = React.useState('otp');
   const [otpStep, setOtpStep] = React.useState('phone');
@@ -48,7 +49,8 @@ function Login() {
     setMessage('');
     try {
       await verifyOtp(phone, otp);
-      navigate('/dashboard', { replace: true });
+      const next = searchParams.get('next') || '/dashboard';
+      navigate(next, { replace: true });
     } catch (err) {
       setError(err?.response?.data?.detail || err?.message || 'OTP verification failed');
     } finally {
@@ -63,7 +65,8 @@ function Login() {
     setMessage('');
     try {
       await loginPassword(phone, password);
-      navigate('/dashboard', { replace: true });
+      const next = searchParams.get('next') || '/dashboard';
+      navigate(next, { replace: true });
     } catch (err) {
       setError(err?.response?.data?.detail || err?.message || 'Password login failed');
     } finally {
@@ -77,7 +80,8 @@ function Login() {
     setMessage('');
     try {
       await googleLogin('');
-      navigate('/dashboard', { replace: true });
+      const next = searchParams.get('next') || '/dashboard';
+      navigate(next, { replace: true });
     } catch (err) {
       setError(err?.response?.data?.detail || err?.message || 'Google login failed');
     } finally {
