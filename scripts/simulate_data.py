@@ -4,7 +4,7 @@ import argparse
 import random
 import sys
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 
@@ -17,17 +17,25 @@ from app.db import Base, SessionLocal, engine
 from app.models import (
     AttendanceRecord,
     Batch,
+    BatchSchedule,
     ClassSession,
     FeeRecord,
     Homework,
     HomeworkSubmission,
+    AllowedUser,
+    AllowedUserStatus,
+    AuthUser,
     Parent,
     PendingAction,
     ReferralCode,
+    Room,
     Student,
+    StudentBatchMap,
     StudentRiskProfile,
+    Role,
 )
 from app.services.attendance_service import submit_attendance
+from app.services.class_session_service import create_class_session
 from app.services.fee_service import build_upi_link, mark_fee_paid
 from app.services.homework_service import create_homework, submit_homework
 from app.services.parent_service import create_parent, link_parent_student
@@ -38,10 +46,52 @@ from app.services.student_risk_service import recompute_all_student_risk
 
 RNG = random.Random(20260209)
 
+ROOM_BLUEPRINTS = [
+    {'name': 'Orion Lab', 'capacity': 24, 'color_code': '#60a5fa'},
+    {'name': 'Nova Studio', 'capacity': 28, 'color_code': '#34d399'},
+    {'name': 'Zen Room', 'capacity': 20, 'color_code': '#f97316'},
+]
+
 BATCH_BLUEPRINTS = [
-    ('Physics_9', '08:00'),
-    ('Chemistry_10', '09:30'),
-    ('Maths_12', '16:00'),
+    {
+        'name': 'Physics_9',
+        'start_time': '08:00',
+        'subject': 'Physics',
+        'academic_level': 'Grade 9',
+        'color_code': '#60a5fa',
+        'duration_minutes': 60,
+        'room': 'Orion Lab',
+        'location': 'Block A - 2F',
+        'max_students': 30,
+        'is_online': False,
+        'meeting_link': '',
+    },
+    {
+        'name': 'Chemistry_10',
+        'start_time': '09:30',
+        'subject': 'Chemistry',
+        'academic_level': 'Grade 10',
+        'color_code': '#34d399',
+        'duration_minutes': 60,
+        'room': 'Nova Studio',
+        'location': 'Block B - 1F',
+        'max_students': 28,
+        'is_online': False,
+        'meeting_link': '',
+    },
+    {
+        'name': 'Maths_12',
+        'start_time': '16:00',
+        'subject': 'Mathematics',
+        'academic_level': 'Grade 12',
+        'color_code': '#f97316',
+        'duration_minutes': 75,
+        'room': 'Zen Room',
+        'location': 'Block C - 3F',
+        'max_students': 24,
+        'is_online': True,
+        'meeting_link': 'https://meet.example.com/maths-12',
+    },
 ]
 
 SUBJECTS_BY_BATCH = {
@@ -97,20 +147,177 @@ def ensure_schema(reset_db: bool) -> None:
     Base.metadata.create_all(bind=engine)
 
 
-def get_or_create_batch(db, name: str, start_time: str) -> Batch:
+def get_or_create_room(db, name: str, capacity: int, color_code: str) -> Room:
+    row = db.query(Room).filter(Room.name == name).first()
+    if not row:
+        row = Room(name=name, capacity=capacity, color_code=color_code)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
+
+    changed = False
+    if row.capacity != capacity:
+        row.capacity = capacity
+        changed = True
+    if row.color_code != color_code:
+        row.color_code = color_code
+        changed = True
+    if changed:
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def get_or_create_batch(db, blueprint: dict, room_id: int | None) -> Batch:
+    name = blueprint['name']
+    start_time = blueprint['start_time']
+    subject = blueprint['subject']
+    academic_level = blueprint['academic_level']
+    color_code = blueprint['color_code']
+    duration_minutes = int(blueprint.get('duration_minutes') or 60)
+    location = blueprint.get('location')
+    max_students = blueprint.get('max_students')
+    is_online = bool(blueprint.get('is_online', False))
+    meeting_link = blueprint.get('meeting_link')
+
     row = db.query(Batch).filter(Batch.name == name).first()
     if row:
+        changed = False
         if row.start_time != start_time:
             row.start_time = start_time
+            changed = True
+        if row.subject != subject:
+            row.subject = subject
+            changed = True
+        if row.academic_level != academic_level:
+            row.academic_level = academic_level
+            changed = True
+        if row.color_code != color_code:
+            row.color_code = color_code
+            changed = True
+        if row.default_duration_minutes != duration_minutes:
+            row.default_duration_minutes = duration_minutes
+            changed = True
+        if row.location != location:
+            row.location = location
+            changed = True
+        if row.max_students != max_students:
+            row.max_students = max_students
+            changed = True
+        if row.is_online != is_online:
+            row.is_online = is_online
+            changed = True
+        if row.meeting_link != meeting_link:
+            row.meeting_link = meeting_link
+            changed = True
+        if row.room_id != room_id:
+            row.room_id = room_id
+            changed = True
+        if changed:
             db.commit()
             db.refresh(row)
         return row
 
-    row = Batch(name=name, start_time=start_time)
+    row = Batch(
+        name=name,
+        start_time=start_time,
+        subject=subject,
+        academic_level=academic_level,
+        color_code=color_code,
+        default_duration_minutes=duration_minutes,
+        location=location,
+        max_students=max_students,
+        is_online=is_online,
+        meeting_link=meeting_link,
+        room_id=room_id,
+    )
     db.add(row)
     db.commit()
     db.refresh(row)
     return row
+
+
+def get_or_create_teacher_user(db, phone: str = '9990000001') -> AuthUser:
+    row = db.query(AuthUser).filter(AuthUser.phone == phone).first()
+    if not row:
+        row = AuthUser(
+            phone=phone,
+            role=Role.TEACHER.value,
+            time_zone='Asia/Kolkata',
+            calendar_preferences='{\"snap_interval\":30,\"work_day_start\":\"07:00\",\"work_day_end\":\"20:00\",\"default_view\":\"week\"}',
+            calendar_view_preference='week',
+            calendar_snap_minutes=30,
+            enable_live_mode_auto_open=True,
+            default_event_color='#2f7bf6',
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    elif row.role != Role.TEACHER.value:
+        row.role = Role.TEACHER.value
+        db.commit()
+        db.refresh(row)
+
+    if row.time_zone != 'Asia/Kolkata' or not row.calendar_preferences:
+        row.time_zone = 'Asia/Kolkata'
+        row.calendar_preferences = row.calendar_preferences or '{"snap_interval":30,"work_day_start":"07:00","work_day_end":"20:00","default_view":"week"}'
+        row.calendar_view_preference = row.calendar_view_preference or 'week'
+        row.calendar_snap_minutes = row.calendar_snap_minutes or 30
+        row.enable_live_mode_auto_open = True if row.enable_live_mode_auto_open is None else row.enable_live_mode_auto_open
+        row.default_event_color = row.default_event_color or '#2f7bf6'
+        db.commit()
+        db.refresh(row)
+
+    allowed = db.query(AllowedUser).filter(AllowedUser.phone == phone).first()
+    if not allowed:
+        allowed = AllowedUser(phone=phone, role=Role.TEACHER.value, status=AllowedUserStatus.ACTIVE.value)
+        db.add(allowed)
+        db.commit()
+    elif allowed.role != Role.TEACHER.value:
+        allowed.role = Role.TEACHER.value
+        if allowed.status != AllowedUserStatus.ACTIVE.value:
+            allowed.status = AllowedUserStatus.ACTIVE.value
+        db.commit()
+
+    return row
+
+
+def ensure_batch_schedules(db, batch: Batch, weekdays: list[int], duration_minutes: int = 60) -> int:
+    created = 0
+    for weekday in weekdays:
+        existing = db.query(BatchSchedule).filter(
+            BatchSchedule.batch_id == batch.id,
+            BatchSchedule.weekday == weekday,
+            BatchSchedule.start_time == batch.start_time,
+        ).first()
+        if existing:
+            continue
+        db.add(
+            BatchSchedule(
+                batch_id=batch.id,
+                weekday=weekday,
+                start_time=batch.start_time,
+                duration_minutes=duration_minutes,
+            )
+        )
+        db.commit()
+        created += 1
+    return created
+
+
+def ensure_student_batch_map(db, student: Student, batch_id: int) -> None:
+    existing = db.query(StudentBatchMap).filter(
+        StudentBatchMap.student_id == student.id,
+        StudentBatchMap.batch_id == batch_id,
+    ).first()
+    if existing:
+        if not existing.active:
+            existing.active = True
+            db.commit()
+        return
+    db.add(StudentBatchMap(student_id=student.id, batch_id=batch_id, active=True))
+    db.commit()
 
 
 def _generate_mobile(base: int, index: int) -> str:
@@ -131,7 +338,7 @@ def build_student_seeds(total_students: int = 36) -> list[StudentSeed]:
     names = names[:total_students]
 
     behaviors = _build_behaviors()
-    batch_names = [name for name, _ in BATCH_BLUEPRINTS]
+    batch_names = [row['name'] for row in BATCH_BLUEPRINTS]
 
     seeds: list[StudentSeed] = []
     for idx, name in enumerate(names):
@@ -168,12 +375,25 @@ def get_or_create_student(db, seed: StudentSeed, batch_id: int) -> tuple[Student
         if row.batch_id != batch_id:
             row.batch_id = batch_id
             changed = True
+        if not row.preferred_contact_method:
+            row.preferred_contact_method = RNG.choice(['telegram', 'whatsapp', 'sms'])
+            changed = True
+        if not row.language_preference:
+            row.language_preference = RNG.choice(['en', 'hi', 'ta'])
+            changed = True
         if changed:
             db.commit()
             db.refresh(row)
         return row, False
 
-    row = Student(name=seed.name, guardian_phone=seed.student_phone, telegram_chat_id='', batch_id=batch_id)
+    row = Student(
+        name=seed.name,
+        guardian_phone=seed.student_phone,
+        telegram_chat_id='',
+        batch_id=batch_id,
+        preferred_contact_method=RNG.choice(['telegram', 'whatsapp', 'sms']),
+        language_preference=RNG.choice(['en', 'hi', 'ta']),
+    )
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -279,6 +499,7 @@ def simulate_attendance_and_sessions(
     students_by_batch: dict[int, list[Student]],
     behavior_by_student: dict[int, str],
     attendance_propensity_by_student: dict[int, float],
+    teacher_id: int,
 ) -> tuple[int, int]:
     sessions_before = db.query(ClassSession).count()
     attendance_touched = 0
@@ -304,7 +525,7 @@ def simulate_attendance_and_sessions(
                 attendance_date=class_date,
                 records=records,
                 subject=topic,
-                teacher_id=101,
+                teacher_id=teacher_id,
                 topic_planned=f'{topic} guided practice',
                 topic_completed=f'{topic} completed with board examples',
             )
@@ -312,6 +533,38 @@ def simulate_attendance_and_sessions(
 
     sessions_after = db.query(ClassSession).count()
     return max(0, sessions_after - sessions_before), attendance_touched
+
+
+def seed_upcoming_sessions(db, batches: list[Batch], teacher_id: int) -> int:
+    created = 0
+    today = date.today()
+    for batch in batches:
+        schedules = db.query(BatchSchedule).filter(BatchSchedule.batch_id == batch.id).all()
+        if not schedules:
+            continue
+        for offset in range(0, 7):
+            target_day = today + timedelta(days=offset)
+            weekday = target_day.weekday()
+            day_schedules = [s for s in schedules if s.weekday == weekday]
+            for schedule in day_schedules:
+                scheduled_start = datetime.combine(target_day, datetime.strptime(schedule.start_time, '%H:%M').time())
+                existing = db.query(ClassSession).filter(
+                    ClassSession.batch_id == batch.id,
+                    ClassSession.scheduled_start == scheduled_start,
+                ).first()
+                if existing:
+                    continue
+                create_class_session(
+                    db,
+                    batch_id=batch.id,
+                    subject=batch.subject,
+                    scheduled_start=scheduled_start,
+                    teacher_id=teacher_id,
+                    topic_planned=f'{batch.subject} focus block',
+                    duration_minutes=schedule.duration_minutes or 60,
+                )
+                created += 1
+    return created
 
 
 def simulate_homework(
@@ -440,10 +693,20 @@ def main() -> None:
 
     db = SessionLocal()
     try:
+        teacher = get_or_create_teacher_user(db)
         actions_before = db.query(PendingAction).count()
 
-        batches = [get_or_create_batch(db, name, start_time) for name, start_time in BATCH_BLUEPRINTS]
+        rooms = {
+            blueprint['name']: get_or_create_room(db, blueprint['name'], blueprint['capacity'], blueprint['color_code'])
+            for blueprint in ROOM_BLUEPRINTS
+        }
+        batches = [
+            get_or_create_batch(db, blueprint, rooms.get(blueprint['room']).id if blueprint.get('room') else None)
+            for blueprint in BATCH_BLUEPRINTS
+        ]
         batch_by_name = {batch.name: batch for batch in batches}
+        for batch in batches:
+            ensure_batch_schedules(db, batch, weekdays=[0, 2, 4], duration_minutes=batch.default_duration_minutes or 60)
 
         seeds = build_student_seeds(total_students=36)
 
@@ -460,6 +723,7 @@ def main() -> None:
 
             parent = get_or_create_parent_for_student(db, seed.name, seed.parent_phone)
             link_parent_student(db, parent_id=parent.id, student_id=student.id, relation='guardian')
+            ensure_student_batch_map(db, student, batch.id)
 
             students.append(student)
             behavior_by_student[student.id] = seed.behavior
@@ -477,7 +741,10 @@ def main() -> None:
             students_by_batch=students_by_batch,
             behavior_by_student=behavior_by_student,
             attendance_propensity_by_student=attendance_propensity_by_student,
+            teacher_id=teacher.id,
         )
+
+        sessions_created += seed_upcoming_sessions(db, batches=batches, teacher_id=teacher.id)
 
         simulate_homework(
             db=db,

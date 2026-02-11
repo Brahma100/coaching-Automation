@@ -15,6 +15,7 @@ const AttendanceToken = React.lazy(() => import('./pages/AttendanceToken.jsx'));
 const ClassStartToken = React.lazy(() => import('./pages/ClassStartToken.jsx'));
 const Dashboard = React.lazy(() => import('./pages/Dashboard.jsx'));
 const Today = React.lazy(() => import('./pages/Today.jsx'));
+const TeacherCalendar = React.lazy(() => import('./pages/TeacherCalendar.jsx'));
 const Fees = React.lazy(() => import('./pages/Fees.jsx'));
 const Homework = React.lazy(() => import('./pages/Homework.jsx'));
 const Login = React.lazy(() => import('./pages/Login.jsx'));
@@ -57,6 +58,7 @@ function App() {
             { path: '/', element: redirectDashboard },
             { path: '/dashboard', element: page(Dashboard) },
             { path: '/today', element: page(Today) },
+            { path: '/calendar', element: page(TeacherCalendar) },
             { path: '/students', element: page(Students) },
             { path: '/batches', element: page(Batches) },
             { path: '/attendance', element: page(Attendance) },

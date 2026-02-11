@@ -265,4 +265,50 @@ export async function fetchTodayView(teacherId) {
   return data;
 }
 
+export async function fetchTeacherCalendar({ start, end, view = 'week', teacherId, bypassCache = false }) {
+  const params = new URLSearchParams();
+  params.set('start', start);
+  params.set('end', end);
+  params.set('view', view);
+  if (teacherId) params.set('teacher_id', String(teacherId));
+  if (bypassCache) params.set('bypass_cache', '1');
+  const { data } = await api.get(`${BACKEND}/api/calendar?${params.toString()}`);
+  return data;
+}
+
+export async function fetchCalendarSession(sessionId) {
+  const { data } = await api.get(`${BACKEND}/api/calendar/${sessionId}`);
+  return data;
+}
+
+export async function fetchCalendarAnalytics({ start, end, teacherId, bypassCache = false }) {
+  const params = new URLSearchParams();
+  params.set('start', start);
+  params.set('end', end);
+  if (teacherId) params.set('teacher_id', String(teacherId));
+  if (bypassCache) params.set('bypass_cache', '1');
+  const { data } = await api.get(`${BACKEND}/api/calendar/analytics?${params.toString()}`);
+  return data;
+}
+
+export async function createCalendarOverride(payload) {
+  const { data } = await api.post(`${BACKEND}/api/calendar/override`, payload);
+  return data;
+}
+
+export async function updateCalendarOverride(overrideId, payload) {
+  const { data } = await api.put(`${BACKEND}/api/calendar/override/${overrideId}`, payload);
+  return data;
+}
+
+export async function deleteCalendarOverride(overrideId) {
+  const { data } = await api.delete(`${BACKEND}/api/calendar/override/${overrideId}`);
+  return data;
+}
+
+export async function validateCalendarConflicts(payload) {
+  const { data } = await api.post(`${BACKEND}/api/calendar/conflicts/validate`, payload);
+  return data;
+}
+
 export default api;

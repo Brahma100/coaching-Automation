@@ -1,13 +1,14 @@
 from contextlib import asynccontextmanager
 import logging
 import time
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.db import Base, SessionLocal, engine
-from app.routers import actions, admin_allowlist, admin_ops, allowlist_admin, allowlist_admin_ui, attendance, attendance_manage_ui, attendance_session_api, attendance_session_ui, auth, batches_ui, catalog, class_session, communications, dashboard, dashboard_today, fee, homework, inbox, offers, parents, referral, rules, session_summary_api, session_summary_ui, student_api, student_risk, student_ui, students_ui, teacher_brief, teacher_profile, tokens, ui
+from app.routers import actions, admin_allowlist, admin_ops, allowlist_admin, allowlist_admin_ui, attendance, attendance_manage_ui, attendance_session_api, attendance_session_ui, auth, batches_ui, catalog, class_session, communications, dashboard, dashboard_today, fee, homework, inbox, offers, parents, referral, rules, session_summary_api, session_summary_ui, student_api, student_risk, student_ui, students_ui, teacher_brief, teacher_calendar, teacher_profile, tokens, ui
 from app.scheduler import start_scheduler, stop_scheduler
 from app.session_middleware import SessionAuthMiddleware
 from app.route_logging import EndpointNameRoute
@@ -84,6 +85,7 @@ app.include_router(allowlist_admin_ui.router)
 app.include_router(student_api.router)
 app.include_router(student_ui.router)
 app.include_router(teacher_brief.router)
+app.include_router(teacher_calendar.router)
 app.include_router(teacher_profile.router)
 app.include_router(session_summary_ui.router)
 app.include_router(session_summary_api.router)
@@ -93,3 +95,13 @@ app.include_router(tokens.router)
 @app.get('/')
 def health():
     return {'app': settings.app_name, 'status': 'ok'}
+
+
+@app.get('/health')
+def healthcheck():
+    return {'status': 'ok'}
+
+
+_frontend_dist = Path('frontend') / 'dist'
+if _frontend_dist.exists():
+    app.mount('/', StaticFiles(directory=str(_frontend_dist), html=True), name='frontend')

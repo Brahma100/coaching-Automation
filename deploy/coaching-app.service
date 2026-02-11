@@ -1,0 +1,21 @@
+[Unit]
+Description=Coaching Automation API (Gunicorn + Uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=coachapp
+Group=coachapp
+WorkingDirectory=/opt/coaching_automation
+EnvironmentFile=/opt/coaching_automation/.env
+Environment="PATH=/opt/coaching_automation/.venv/bin"
+ExecStart=/opt/coaching_automation/.venv/bin/gunicorn -c /opt/coaching_automation/deploy/gunicorn.conf.py app.main:app
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

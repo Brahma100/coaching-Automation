@@ -64,6 +64,7 @@ function DashboardLayout() {
   const primaryMenu = React.useMemo(() => {
     const base = [
       { to: '/today', label: 'Today View', icon: FiClock },
+      { to: '/calendar', label: 'Teacher Calendar', icon: FiCalendar },
       { to: '/dashboard', label: 'Dashboard', icon: FiGrid },
       { to: '/attendance', label: 'Manage Attendance', icon: FiBookOpen },
       { to: '/students', label: 'Manage Students', icon: FiUserCheck },
@@ -157,7 +158,7 @@ function DashboardLayout() {
         />
       ) : null}
 
-      <div className="mx-auto max-w-[1420px] lg:grid lg:grid-cols-[280px,1fr]">
+      <div className="mx-auto w-full lg:grid lg:grid-cols-[280px,1fr]">
         <aside className="hidden min-h-screen border-r border-slate-200 bg-white px-6 py-8 dark:border-slate-800 dark:bg-slate-900 lg:block">
           {renderSidebarContent()}
         </aside>

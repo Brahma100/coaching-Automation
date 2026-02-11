@@ -26,6 +26,13 @@ class Batch(Base):
     start_time: Mapped[str] = mapped_column(String(10), default='07:00')
     subject: Mapped[str] = mapped_column(String(120), default='General', index=True)
     academic_level: Mapped[str] = mapped_column(String(20), default='')
+    color_code: Mapped[str] = mapped_column(String(16), default='#2f7bf6')
+    default_duration_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    max_students: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_online: Mapped[bool] = mapped_column(Boolean, default=False)
+    meeting_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    room_id: Mapped[int | None] = mapped_column(ForeignKey('rooms.id'), nullable=True, index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -33,6 +40,7 @@ class Batch(Base):
     schedules: Mapped[list['BatchSchedule']] = relationship('BatchSchedule', back_populates='batch')
     student_links: Mapped[list['StudentBatchMap']] = relationship('StudentBatchMap', back_populates='batch')
     class_sessions: Mapped[list['ClassSession']] = relationship('ClassSession', back_populates='batch')
+    room: Mapped['Room | None'] = relationship('Room', back_populates='batches')
     program_links: Mapped[list['BatchProgram']] = relationship('BatchProgram', back_populates='batch', cascade='all, delete-orphan')
     board_links: Mapped[list['BatchBoard']] = relationship('BatchBoard', back_populates='batch', cascade='all, delete-orphan')
     level_links: Mapped[list['BatchLevel']] = relationship('BatchLevel', back_populates='batch', cascade='all, delete-orphan')
@@ -151,6 +159,8 @@ class Student(Base):
     enable_daily_digest: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     enable_homework_reminders: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     enable_motivation_messages: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    preferred_contact_method: Mapped[str] = mapped_column(String(20), default='telegram')
+    language_preference: Mapped[str] = mapped_column(String(20), default='en')
 
     batch: Mapped['Batch'] = relationship('Batch', back_populates='students')
     batch_links: Mapped[list['StudentBatchMap']] = relationship('StudentBatchMap', back_populates='student')
@@ -181,6 +191,9 @@ class AttendanceRecord(Base):
 
 class FeeRecord(Base):
     __tablename__ = 'fee_records'
+    __table_args__ = (
+        Index('ix_fee_records_student_due_paid', 'student_id', 'due_date', 'is_paid'),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     student_id: Mapped[int] = mapped_column(ForeignKey('students.id'))
@@ -284,6 +297,9 @@ class ClassSession(Base):
 
 class BatchSchedule(Base):
     __tablename__ = 'batch_schedules'
+    __table_args__ = (
+        Index('ix_batch_schedules_weekday_start_time', 'weekday', 'start_time'),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
@@ -297,6 +313,9 @@ class BatchSchedule(Base):
 
 class StudentBatchMap(Base):
     __tablename__ = 'student_batch_map'
+    __table_args__ = (
+        Index('ix_student_batch_map_batch_active', 'batch_id', 'active'),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     student_id: Mapped[int] = mapped_column(ForeignKey('students.id'), index=True)
@@ -402,6 +421,12 @@ class AuthUser(Base):
     password_hash: Mapped[str] = mapped_column(String(255), default='')
     google_sub: Mapped[str] = mapped_column(String(255), default='', index=True)
     notification_delete_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    time_zone: Mapped[str] = mapped_column(String(60), default='UTC')
+    calendar_preferences: Mapped[str] = mapped_column(Text, default='{}')
+    calendar_view_preference: Mapped[str] = mapped_column(String(20), default='week')
+    calendar_snap_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    enable_live_mode_auto_open: Mapped[bool] = mapped_column(Boolean, default=True)
+    default_event_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 class AllowedUser(Base):
@@ -498,3 +523,37 @@ class StudentDashboardSnapshot(Base):
     date: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
     data_json: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class Room(Base):
+    __tablename__ = 'rooms'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    institute_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    capacity: Mapped[int] = mapped_column(Integer, default=0)
+    color_code: Mapped[str] = mapped_column(String(16), default='#94a3b8')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    batches: Mapped[list['Batch']] = relationship('Batch', back_populates='room')
+
+
+class CalendarOverride(Base):
+    __tablename__ = 'calendar_overrides'
+    __table_args__ = (
+        Index('ix_calendar_overrides_batch_date', 'batch_id', 'override_date'),
+        Index('ix_calendar_overrides_date_batch', 'override_date', 'batch_id'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    institute_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
+    override_date: Mapped[date] = mapped_column(Date, index=True)
+    new_start_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    new_duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cancelled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    reason: Mapped[str] = mapped_column(Text, default='')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    batch: Mapped['Batch'] = relationship('Batch')
