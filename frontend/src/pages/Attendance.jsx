@@ -5,6 +5,7 @@ import { InlineSkeletonText } from '../components/Skeleton.jsx';
 import {
   fetchAttendanceManageOptions,
   fetchAttendanceSession,
+  notifyGlobalToast,
   openAttendanceSession,
   submitAttendanceSession
 } from '../services/api';
@@ -27,6 +28,9 @@ function normalizeStatus(value) {
 
 function Attendance() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryBatchId = searchParams.get('batch_id') || '';
+  const queryDate = searchParams.get('date') || '';
+  const queryScheduleId = searchParams.get('schedule_id') || '';
   const [loadingOptions, setLoadingOptions] = React.useState(true);
   const [opening, setOpening] = React.useState(false);
   const [loadingSheet, setLoadingSheet] = React.useState(false);
@@ -36,17 +40,18 @@ function Attendance() {
 
   const [batches, setBatches] = React.useState([]);
   const [schedules, setSchedules] = React.useState([]);
-  const [selectedBatchId, setSelectedBatchId] = React.useState('');
-  const [selectedScheduleId, setSelectedScheduleId] = React.useState('');
-  const [selectedDate, setSelectedDate] = React.useState(toToday());
+  const [selectedBatchId, setSelectedBatchId] = React.useState(queryBatchId || '');
+  const [selectedScheduleId, setSelectedScheduleId] = React.useState(queryScheduleId || '');
+  const [selectedDate, setSelectedDate] = React.useState(queryDate || toToday());
 
   const [sheet, setSheet] = React.useState(null);
   const [rows, setRows] = React.useState([]);
 
   const sessionId = searchParams.get('session_id') || '';
   const token = searchParams.get('token') || '';
+  const isFutureSelectedDate = Boolean(selectedDate && selectedDate > toToday());
 
-  const loadOptions = React.useCallback(async (batchId = '') => {
+  const loadOptions = React.useCallback(async (batchId = '', preferredScheduleId = '') => {
     setLoadingOptions(true);
     try {
       const payload = await fetchAttendanceManageOptions(batchId);
@@ -56,7 +61,9 @@ function Attendance() {
       const resolvedBatchId = String(payload?.selected_batch_id || batchRows[0]?.id || '');
       setSelectedBatchId(resolvedBatchId);
       setSchedules(scheduleRows);
-      setSelectedScheduleId(String(scheduleRows[0]?.id || ''));
+      const matchSchedule = String(preferredScheduleId || '');
+      const hasPreferredSchedule = Boolean(matchSchedule && scheduleRows.some((slot) => String(slot.id) === matchSchedule));
+      setSelectedScheduleId(hasPreferredSchedule ? matchSchedule : String(scheduleRows[0]?.id || ''));
       setError('');
     } catch (err) {
       setError(err?.response?.data?.detail || err?.message || 'Failed to load attendance options');
@@ -72,6 +79,9 @@ function Attendance() {
       const payload = await fetchAttendanceSession(id, tkn);
       setSheet(payload || null);
       setRows(normalizeList(payload?.rows));
+      const sessionBatchId = String(payload?.session?.batch_id || '');
+      if (sessionBatchId) setSelectedBatchId(sessionBatchId);
+      if (payload?.attendance_date) setSelectedDate(String(payload.attendance_date));
       setError('');
     } catch (err) {
       setSheet(null);
@@ -83,8 +93,8 @@ function Attendance() {
   }, []);
 
   React.useEffect(() => {
-    loadOptions('');
-  }, [loadOptions]);
+    loadOptions(queryBatchId, queryScheduleId);
+  }, [loadOptions, queryBatchId, queryScheduleId]);
 
   React.useEffect(() => {
     if (!sessionId) return;
@@ -98,6 +108,13 @@ function Attendance() {
 
   const onOpenSession = async (event) => {
     event.preventDefault();
+    if (isFutureSelectedDate) {
+      notifyGlobalToast({
+        tone: 'info',
+        message: 'Attendance sheet can only be opened for current or past dates.',
+      });
+      return;
+    }
     if (!selectedBatchId) return;
     setOpening(true);
     setSuccess('');
@@ -196,10 +213,10 @@ function Attendance() {
           </select>
           <button
             type="submit"
-            disabled={!selectedBatchId || opening}
+            disabled={!selectedBatchId || opening || isFutureSelectedDate}
             className="action-glow-btn rounded-lg bg-[#2f7bf6] px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
           >
-            {opening ? 'Opening...' : 'Open Attendance Sheet'}
+            {opening ? 'Opening...' : isFutureSelectedDate ? 'Unavailable for Future Date' : 'Open Attendance Sheet'}
           </button>
         </form>
       </div>

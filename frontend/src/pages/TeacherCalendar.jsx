@@ -1,5 +1,7 @@
 ﻿import React from 'react';
-import { FiPlus, FiRefreshCw } from 'react-icons/fi';
+import { FiAlertTriangle, FiBell, FiCalendar, FiClock, FiPlus, FiRefreshCw, FiUsers, FiZap } from 'react-icons/fi';
+import { FaIndianRupeeSign } from 'react-icons/fa6';
+import { useNavigate } from 'react-router-dom';
 
 import Modal from '../components/Modal.jsx';
 import CalendarHeader from '../components/calendar/CalendarHeader.jsx';
@@ -11,9 +13,12 @@ import useRole from '../hooks/useRole';
 import {
   createCalendarOverride,
   deleteCalendarOverride,
+  fetchBatches,
   fetchCalendarSession,
   fetchTeacherCalendar,
   fetchCalendarAnalytics,
+  openAttendanceSession,
+  syncCalendarHolidays,
   updateCalendarOverride,
   validateCalendarConflicts
 } from '../services/api';
@@ -49,6 +54,37 @@ function formatDateLocal(dt) {
   return `${year}-${month}-${day}`;
 }
 
+function fullYear(dt) {
+  return String(dt.getFullYear());
+}
+
+function shortMonth(dt) {
+  return dt.toLocaleDateString([], { month: 'short' });
+}
+
+function compactDateRangeLabel(start, end, view) {
+  if (view === 'day') {
+    return `${shortMonth(start)} ${start.getDate()}, ${fullYear(start)}`;
+  }
+
+  const sameYear = start.getFullYear() === end.getFullYear();
+  const sameMonth = sameYear && start.getMonth() === end.getMonth();
+
+  if (sameMonth) {
+    return `${shortMonth(start)} ${start.getDate()}-${end.getDate()}, ${fullYear(start)}`;
+  }
+
+  if (sameYear) {
+    return `${shortMonth(start)}/${shortMonth(end)} ${fullYear(start)}`;
+  }
+
+  return `${shortMonth(start)} ${start.getDate()}, ${fullYear(start)} - ${shortMonth(end)} ${end.getDate()}, ${fullYear(end)}`;
+}
+
+function toToday() {
+  return formatDateLocal(new Date());
+}
+
 function rangeForView(anchorDate, view) {
   const base = new Date(anchorDate);
   base.setHours(0, 0, 0, 0);
@@ -74,6 +110,13 @@ function rangeForView(anchorDate, view) {
   return { start, end };
 }
 
+function getWeekOfMonth(sourceDate) {
+  const dt = new Date(sourceDate);
+  const firstOfMonth = new Date(dt.getFullYear(), dt.getMonth(), 1);
+  const firstWeekday = (firstOfMonth.getDay() + 6) % 7;
+  return Math.floor((dt.getDate() + firstWeekday - 1) / 7) + 1;
+}
+
 function nextAnchor(anchorDate, view, direction) {
   const dt = new Date(anchorDate);
   if (view === 'day') dt.setDate(dt.getDate() + direction);
@@ -83,15 +126,56 @@ function nextAnchor(anchorDate, view, direction) {
   return dt;
 }
 
+function parseCalendarDateTime(isoString) {
+  if (!isoString || typeof isoString !== 'string') return new Date(isoString);
+  const hasExplicitOffset = /([zZ]|[+-]\d{2}:\d{2})$/.test(isoString);
+  if (hasExplicitOffset) return new Date(isoString);
+
+  const match = isoString.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/
+  );
+  if (!match) return new Date(isoString);
+
+  const [, y, mo, d, h, mi, s] = match;
+  return new Date(
+    Number(y),
+    Number(mo) - 1,
+    Number(d),
+    Number(h),
+    Number(mi),
+    Number(s || '0'),
+    0
+  );
+}
+
+function formatClockLabel(dt) {
+  return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 function minutesSinceMidnight(isoString) {
-  const dt = new Date(isoString);
+  const dt = parseCalendarDateTime(isoString);
   return dt.getHours() * 60 + dt.getMinutes();
 }
 
 function formatTimeRange(startIso, endIso) {
-  const start = new Date(startIso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const end = new Date(endIso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const start = formatClockLabel(parseCalendarDateTime(startIso));
+  const end = formatClockLabel(parseCalendarDateTime(endIso));
   return `${start} - ${end}`;
+}
+
+function formatEventDateLine(startIso, endIso) {
+  const start = parseCalendarDateTime(startIso);
+  const end = parseCalendarDateTime(endIso);
+  const dayPart = start.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const yearPart = start.getFullYear();
+  return `${dayPart} • ${yearPart}, ${formatClockLabel(start)} - ${formatClockLabel(end)}`;
+}
+
+function getEventStatusUi(status) {
+  if (status === 'live') return { label: 'Live', className: 'status-live' };
+  if (status === 'completed') return { label: 'Completed', className: 'status-completed' };
+  if (status === 'cancelled') return { label: 'Cancelled', className: 'status-cancelled' };
+  return { label: 'Upcoming', className: 'status-upcoming' };
 }
 
 function parsePreferences(raw) {
@@ -105,15 +189,39 @@ function parsePreferences(raw) {
 }
 
 function buildEvents(items) {
+  const now = new Date();
+  const todayKey = formatDateLocal(now);
+
   return items.map((item) => {
     const uid = item.session_id ? `session-${item.session_id}` : `batch-${item.batch_id}-${item.start_datetime}`;
     const startMinutes = minutesSinceMidnight(item.start_datetime);
+    const startDt = parseCalendarDateTime(item.start_datetime);
+    const endDt = parseCalendarDateTime(item.end_datetime);
+    const serverStatus = item.status || 'upcoming';
+    const normalizedStatus = serverStatus === 'cancelled'
+      ? 'cancelled'
+      : (startDt <= now && endDt >= now ? 'live' : (endDt < now ? 'completed' : 'upcoming'));
+
+    let colorClass = 'calendar-tone-default';
+    const isCurrent = startDt <= now && endDt >= now;
+    const isPast = endDt < now;
+    const isUpcomingToday = formatDateLocal(startDt) === todayKey && startDt > now;
+    if (isCurrent) {
+      colorClass = 'calendar-tone-current';
+    } else if (isPast) {
+      colorClass = 'calendar-tone-past';
+    } else if (isUpcomingToday) {
+      colorClass = 'calendar-tone-today-upcoming';
+    }
+
     return {
       ...item,
+      status: normalizedStatus,
       uid,
+      is_current: isCurrent,
       start_minutes: startMinutes,
       time_label: formatTimeRange(item.start_datetime, item.end_datetime),
-      color_class: 'calendar-tone-default'
+      color_class: colorClass
     };
   });
 }
@@ -151,12 +259,15 @@ function snapMinutes(value, interval) {
 }
 
 function TeacherCalendar() {
+  const navigate = useNavigate();
   const { isAdmin, loading: roleLoading } = useRole();
   const [view, setView] = React.useState('week');
   const [anchorDate, setAnchorDate] = React.useState(() => new Date());
   const [teacherId, setTeacherId] = React.useState('');
-  const [filters, setFilters] = React.useState({ search: '', subject: '', academicLevel: '', room: '', hideInactive: false });
+  const [filters, setFilters] = React.useState({ search: '', subject: '', academicLevel: '', room: '' });
   const [items, setItems] = React.useState([]);
+  const [batchCatalog, setBatchCatalog] = React.useState([]);
+  const [holidays, setHolidays] = React.useState([]);
   const [preferences, setPreferences] = React.useState(DEFAULT_PREFS);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState('');
@@ -181,9 +292,12 @@ function TeacherCalendar() {
   });
   const [conflictState, setConflictState] = React.useState({ checking: false, message: '', conflicts: [] });
 
-  const slotHeight = 24;
+  const slotHeight = 30;
+  const gridScrollRef = React.useRef(null);
+  const monthTodayRef = React.useRef(null);
   const dragSnapshot = React.useRef(null);
   const conflictTimer = React.useRef(null);
+  const holidaySyncDoneRef = React.useRef(false);
 
   React.useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
@@ -196,11 +310,13 @@ function TeacherCalendar() {
   }, []);
 
   const isNarrow = viewportWidth <= 720;
-  const timeColWidth = isNarrow ? 56 : 80;
+  const isCompact = viewportWidth <= 480;
+  const timeColWidth = isCompact ? 48 : (isNarrow ? 56 : 80);
   const sidebarWidth = viewportWidth >= 1024 ? 280 : 0;
-  const availableWidth = Math.max(320, viewportWidth - sidebarWidth - 64);
+  const horizontalChrome = viewportWidth <= 720 ? 28 : 64;
+  const availableWidth = Math.max(280, viewportWidth - sidebarWidth - horizontalChrome);
   const dayCount = view === 'day' ? 1 : 7;
-  const minDayWidth = isNarrow ? 130 : 170;
+  const minDayWidth = isCompact ? 88 : (isNarrow ? 108 : 170);
   const computedDayWidth = Math.floor((availableWidth - timeColWidth) / dayCount);
   const dayWidth = view === 'day'
     ? Math.max(minDayWidth, availableWidth - timeColWidth)
@@ -208,23 +324,60 @@ function TeacherCalendar() {
 
   const dateRange = React.useMemo(() => rangeForView(anchorDate, view), [anchorDate, view]);
   const headerDateLabel = React.useMemo(() => {
-    const options = { month: 'long', day: 'numeric', year: 'numeric' };
-    if (view === 'day') return dateRange.start.toLocaleDateString([], options);
-    return `${dateRange.start.toLocaleDateString([], options)} - ${dateRange.end.toLocaleDateString([], options)}`;
+    return compactDateRangeLabel(dateRange.start, dateRange.end, view);
   }, [dateRange, view]);
+  const anchorDateLabel = React.useMemo(() => formatDateLocal(anchorDate), [anchorDate]);
+  const todayKey = React.useMemo(() => formatDateLocal(new Date()), []);
+  const periodPillLabel = React.useMemo(() => {
+    if (view === 'day') {
+      const dayStamp = anchorDate.toLocaleDateString([], { day: '2-digit', month: 'short' });
+      return anchorDateLabel === todayKey ? `Today • ${dayStamp}` : dayStamp;
+    }
+    if (view === 'week') {
+      const weekNumber = getWeekOfMonth(dateRange.start);
+      const startMonth = dateRange.start.toLocaleDateString([], { month: 'short' });
+      const endMonth = dateRange.end.toLocaleDateString([], { month: 'short' });
+      const monthText = startMonth === endMonth ? startMonth : `${startMonth}/${endMonth}`;
+      return `Week ${weekNumber} • ${monthText}`;
+    }
+    if (view === 'month') {
+      return anchorDate.toLocaleDateString([], { month: 'long' });
+    }
+    return 'Agenda';
+  }, [anchorDate, anchorDateLabel, dateRange.end, dateRange.start, todayKey, view]);
 
   const loadCalendar = React.useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const data = await fetchTeacherCalendar({
-        start: formatDateLocal(dateRange.start),
-        end: formatDateLocal(dateRange.end),
-        view,
-        teacherId: isAdmin ? teacherId : undefined
-      });
+      if (!holidaySyncDoneRef.current) {
+        try {
+          await syncCalendarHolidays({
+            startYear: new Date().getFullYear(),
+            years: 5,
+            countryCode: 'IN',
+          });
+        } catch {
+          // Keep calendar usable even if holiday sync endpoint/API is temporarily unavailable.
+        } finally {
+          holidaySyncDoneRef.current = true;
+        }
+      }
+
+      const [data, batchesPayload] = await Promise.all([
+        fetchTeacherCalendar({
+          start: formatDateLocal(dateRange.start),
+          end: formatDateLocal(dateRange.end),
+          view,
+          teacherId: isAdmin ? teacherId : undefined,
+          bypassCache: true,
+        }),
+        fetchBatches().catch(() => []),
+      ]);
       setPreferences(parsePreferences(data.preferences));
       setItems(buildEvents(data.items || []));
+      setHolidays(Array.isArray(data.holidays) ? data.holidays : []);
+      setBatchCatalog(Array.isArray(batchesPayload) ? batchesPayload : []);
     } catch (err) {
       const message = err?.response?.data?.detail || err?.message || 'Failed to load calendar.';
       setError(message);
@@ -236,6 +389,15 @@ function TeacherCalendar() {
   React.useEffect(() => {
     if (roleLoading) return;
     loadCalendar().catch(() => null);
+  }, [loadCalendar, roleLoading]);
+
+  React.useEffect(() => {
+    if (roleLoading) return undefined;
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      loadCalendar().catch(() => null);
+    }, 60000);
+    return () => window.clearInterval(intervalId);
   }, [loadCalendar, roleLoading]);
 
   React.useEffect(() => {
@@ -279,12 +441,46 @@ function TeacherCalendar() {
       if (filters.subject && !item.subject.toLowerCase().includes(filters.subject.toLowerCase())) return false;
       if (filters.academicLevel && !(item.academic_level || '').toLowerCase().includes(filters.academicLevel.toLowerCase())) return false;
       if (filters.room && !(item.room || '').toLowerCase().includes(filters.room.toLowerCase())) return false;
-      if (filters.hideInactive && item.status === 'completed') return false;
       return true;
     });
   }, [items, filters]);
 
+  const filterOptions = React.useMemo(() => ({
+    batches: [...new Set([
+      ...(items || []).map((item) => item.batch_name).filter(Boolean),
+      ...(batchCatalog || []).map((row) => row?.name).filter(Boolean),
+    ])].sort(),
+    subjects: [...new Set((items || []).map((item) => item.subject).filter(Boolean))].sort(),
+    academicLevels: [...new Set((items || []).map((item) => item.academic_level).filter(Boolean))].sort(),
+  }), [batchCatalog, items]);
+
   const eventsByDate = React.useMemo(() => groupEventsByDate(filteredEvents), [filteredEvents]);
+  const holidaysByDate = React.useMemo(() => {
+    const map = {};
+    for (const row of holidays) {
+      const day = row?.date;
+      const name = (row?.local_name || row?.name || '').trim();
+      if (!day || !name) continue;
+      if (!map[day]) map[day] = [];
+      if (!map[day].includes(name)) map[day].push(name);
+    }
+    return map;
+  }, [holidays]);
+
+  React.useEffect(() => {
+    if (!selectedEvent?.uid) return;
+    const latest = items.find((item) => item.uid === selectedEvent.uid);
+    if (!latest) return;
+    const hasChanged =
+      latest.status !== selectedEvent.status ||
+      latest.is_current !== selectedEvent.is_current ||
+      latest.start_datetime !== selectedEvent.start_datetime ||
+      latest.end_datetime !== selectedEvent.end_datetime ||
+      latest.time_label !== selectedEvent.time_label;
+    if (hasChanged) {
+      setSelectedEvent((prev) => (prev ? { ...prev, ...latest } : prev));
+    }
+  }, [items, selectedEvent]);
   const heatmapByDay = React.useMemo(() => {
     const map = {};
     Object.keys(analyticsByDay || {}).forEach((day) => {
@@ -318,6 +514,64 @@ function TeacherCalendar() {
     return (now.getHours() * 60 + now.getMinutes()) / 30 * slotHeight;
   }, [loading]);
 
+  React.useEffect(() => {
+    if (loading || roleLoading) return undefined;
+    let cancelled = false;
+    let attempts = 0;
+    const maxAttempts = 60;
+    let timeoutId = null;
+
+    const scheduleRetry = () => {
+      if (cancelled || attempts >= maxAttempts) return;
+      timeoutId = window.setTimeout(focusNow, 100);
+    };
+
+    const focusNow = () => {
+      if (cancelled) return;
+      attempts += 1;
+      try {
+        if (view === 'day' || view === 'week') {
+          const container = gridScrollRef.current;
+          if (!container || container.clientHeight <= 0 || container.scrollHeight <= container.clientHeight + 4) {
+            scheduleRetry();
+            return;
+          }
+          const target = Math.max(0, currentTimeLine - (container.clientHeight * 0.35));
+          container.scrollTop = target;
+          if (typeof container.scrollTo === 'function') {
+            container.scrollTo({ top: target, behavior: 'smooth' });
+          }
+        } else if (view === 'month') {
+          if (!monthTodayRef.current?.scrollIntoView) {
+            scheduleRetry();
+            return;
+          }
+          monthTodayRef.current.scrollIntoView({
+            behavior: 'smooth',
+            block: 'center',
+            inline: 'nearest',
+          });
+        }
+      } catch {
+        // Fallback for browsers with partial scroll API support
+        const container = gridScrollRef.current;
+        if (container && (view === 'day' || view === 'week')) {
+          const target = Math.max(0, currentTimeLine - (container.clientHeight * 0.35));
+          container.scrollTop = target;
+        } else {
+          scheduleRetry();
+        }
+      }
+    };
+    if (typeof window === 'undefined') return undefined;
+    const rafId = window.requestAnimationFrame(focusNow);
+    return () => {
+      cancelled = true;
+      if (timeoutId) window.clearTimeout(timeoutId);
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [anchorDateLabel, currentTimeLine, loading, roleLoading, view]);
+
   const openEvent = React.useCallback(async (event) => {
     setSelectedEvent(event);
     setSelectedSession(null);
@@ -334,6 +588,83 @@ function TeacherCalendar() {
     setSelectedEvent(null);
     setSelectedSession(null);
   }, []);
+
+  const handleOpenAttendance = React.useCallback(async () => {
+    if (!selectedEvent) return;
+    const attendanceDate = selectedEvent.start_datetime?.slice(0, 10);
+    const batchParam = selectedEvent.batch_id ? `batch_id=${encodeURIComponent(String(selectedEvent.batch_id))}` : '';
+    const dateParam = attendanceDate ? `date=${encodeURIComponent(attendanceDate)}` : '';
+    const contextQuery = [batchParam, dateParam].filter(Boolean).join('&');
+    const contextSuffix = contextQuery ? `&${contextQuery}` : '';
+    try {
+      if (selectedEvent.session_id) {
+        navigate(`/attendance?session_id=${encodeURIComponent(String(selectedEvent.session_id))}${contextSuffix}`);
+        return;
+      }
+      if (!attendanceDate || !selectedEvent.batch_id) {
+        navigate('/attendance');
+        return;
+      }
+      const payload = await openAttendanceSession({
+        batch_id: Number(selectedEvent.batch_id),
+        schedule_id: null,
+        attendance_date: attendanceDate
+      });
+      const nextId = String(payload?.session_id || '');
+      navigate(nextId ? `/attendance?session_id=${encodeURIComponent(nextId)}${contextSuffix}` : `/attendance?${contextQuery}`);
+    } catch (err) {
+      setError(err?.response?.data?.detail || err?.message || 'Failed to open attendance');
+    }
+  }, [navigate, selectedEvent]);
+
+  const handleViewBatch = React.useCallback(() => {
+    if (!selectedEvent?.batch_id) {
+      navigate('/batches');
+      return;
+    }
+    navigate(`/batches?batch_id=${encodeURIComponent(String(selectedEvent.batch_id))}`);
+  }, [navigate, selectedEvent]);
+
+  const handleCancelClass = React.useCallback(async () => {
+    if (!selectedEvent) return;
+    const confirmed = window.confirm('Cancel this class? This will create/update a calendar override.');
+    if (!confirmed) return;
+    try {
+      const start = new Date(selectedEvent.start_datetime);
+      const payload = {
+        batch_id: Number(selectedEvent.batch_id),
+        override_date: selectedEvent.start_datetime.slice(0, 10),
+        new_start_time: `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`,
+        new_duration_minutes: Number(selectedEvent.duration_minutes || 60),
+        cancelled: true,
+        reason: 'Cancelled from calendar modal'
+      };
+      if (selectedEvent.override_id) {
+        await updateCalendarOverride(Number(selectedEvent.override_id), payload);
+      } else {
+        await createCalendarOverride(payload);
+      }
+      closeEventModal();
+      await loadCalendar();
+    } catch (err) {
+      setError(err?.response?.data?.detail || err?.message || 'Failed to cancel class');
+    }
+  }, [closeEventModal, loadCalendar, selectedEvent]);
+
+  const handleSendReminder = React.useCallback(() => {
+    if (!selectedEvent?.batch_id) {
+      navigate('/actions');
+      return;
+    }
+    navigate(`/actions?batch_id=${encodeURIComponent(String(selectedEvent.batch_id))}`);
+  }, [navigate, selectedEvent]);
+
+  const selectedEventDate = selectedEvent?.start_datetime?.slice(0, 10) || '';
+  const todayDate = toToday();
+  const isSelectedEventFuture = Boolean(selectedEventDate && selectedEventDate > todayDate);
+  const isSelectedEventPast = Boolean(selectedEventDate && selectedEventDate < todayDate);
+  const isSelectedEventFinalized = selectedEvent?.status === 'completed' || selectedEvent?.status === 'cancelled';
+  const selectedEventStatusUi = getEventStatusUi(selectedEvent?.status || 'upcoming');
 
   const startAddClass = React.useCallback(() => {
     setEditorMode('create');
@@ -599,7 +930,10 @@ function TeacherCalendar() {
                     onClick={() => openEvent(event)}
                   >
                     <div className="calendar-event-head">
-                      <p className="calendar-event-title">{event.batch_name}</p>
+                      <span className="calendar-event-title-wrap">
+                        {event.is_current ? <span className="calendar-active-zap" title="Currently running"><FiZap /></span> : null}
+                        <p className="calendar-event-title">{event.batch_name}</p>
+                      </span>
                       {event.status === 'live' ? <span className="calendar-live-pill">LIVE</span> : null}
                     </div>
                     <p className="calendar-event-time">{event.time_label}</p>
@@ -619,11 +953,21 @@ function TeacherCalendar() {
             const dayKey = formatDateLocal(day);
             const isOutside = day.getMonth() !== anchorDate.getMonth();
             const dayEvents = monthEventsByDate[dayKey] || [];
+            const dayHolidayNames = holidaysByDate[dayKey] || [];
             const visibleEvents = dayEvents.slice(0, 3);
             const moreCount = Math.max(0, dayEvents.length - visibleEvents.length);
             return (
-              <div key={dayKey} className={`calendar-month-cell ${isOutside ? 'outside' : ''}`}>
+              <div
+                key={dayKey}
+                ref={dayKey === todayKey ? monthTodayRef : null}
+                className={`calendar-month-cell ${isOutside ? 'outside' : ''} ${dayKey === todayKey ? 'today' : ''}`}
+              >
                 <div className="calendar-month-date">{day.getDate()}</div>
+                {dayHolidayNames.length ? (
+                  <div className="calendar-month-holiday" title={dayHolidayNames.join(', ')}>
+                    {dayHolidayNames[0]}
+                  </div>
+                ) : null}
                 <div className="calendar-month-items">
                   {visibleEvents.map((event) => (
                     <button
@@ -633,7 +977,10 @@ function TeacherCalendar() {
                       onClick={() => openEvent(event)}
                     >
                       <div className="calendar-event-head">
-                        <p className="calendar-event-title">{event.batch_name}</p>
+                        <span className="calendar-event-title-wrap">
+                          {event.is_current ? <span className="calendar-active-zap" title="Currently running"><FiZap /></span> : null}
+                          <p className="calendar-event-title">{event.batch_name}</p>
+                        </span>
                         {event.status === 'live' ? <span className="calendar-live-pill">LIVE</span> : null}
                       </div>
                       <p className="calendar-event-time">{event.time_label}</p>
@@ -658,9 +1005,11 @@ function TeacherCalendar() {
         isNarrow={isNarrow}
         currentTimeLine={currentTimeLine}
         onEventClick={openEvent}
-        onEventDrop={handleEventDrop}
-        onDragPreview={handleDragPreview}
-        onResizeStart={handleResizeStart}
+        heatmapByDay={heatmapByDay}
+        heatmapEnabled={heatmapEnabled}
+        holidaysByDate={holidaysByDate}
+        showHolidays={view === 'week'}
+        scrollContainerRef={gridScrollRef}
       />
     );
   };
@@ -669,6 +1018,13 @@ function TeacherCalendar() {
     <section className="teacher-calendar-page">
       <CalendarHeader
         currentDate={headerDateLabel}
+        anchorDate={anchorDateLabel}
+        onAnchorDateChange={(value) => {
+          if (!value) return;
+          const next = new Date(value);
+          if (Number.isNaN(next.getTime())) return;
+          setAnchorDate(next);
+        }}
         view={view}
         onViewChange={setView}
         onPrev={() => setAnchorDate((prev) => nextAnchor(prev, view, -1))}
@@ -676,17 +1032,26 @@ function TeacherCalendar() {
         onToday={() => setAnchorDate(new Date())}
         filters={filters}
         onFiltersChange={setFilters}
+        filterOptions={filterOptions}
         isAdmin={isAdmin}
         teacherId={teacherId}
         onTeacherIdChange={setTeacherId}
+        heatmapEnabled={heatmapEnabled}
+        onHeatmapToggle={setHeatmapEnabled}
       />
 
       <ErrorState message={error} />
 
       <div className="calendar-content-shell">
-        <button type="button" className="calendar-refresh-btn" onClick={() => loadCalendar().catch(() => null)}>
-          <FiRefreshCw /> Refresh
-        </button>
+        <div className="calendar-content-topbar">
+          <button type="button" className="calendar-refresh-btn" onClick={() => loadCalendar().catch(() => null)}>
+            <FiRefreshCw /> Refresh
+          </button>
+          <div className="calendar-period-pill" aria-live="polite">
+            <span className="calendar-period-pill-kicker">{view[0].toUpperCase() + view.slice(1)} view</span>
+            <span className="calendar-period-pill-value">{periodPillLabel}</span>
+          </div>
+        </div>
         {mainContent()}
       </div>
 
@@ -696,29 +1061,64 @@ function TeacherCalendar() {
 
       <LiveClassPanel
         liveEvent={liveEvent}
-        onStartAttendance={() => null}
-        onQuickMessage={() => null}
-        onViewBatch={() => null}
+        onOpenLiveEvent={openEvent}
       />
 
       <Modal
         open={Boolean(selectedEvent)}
-        title={selectedEvent ? `${selectedEvent.batch_name} • ${selectedEvent.subject}` : 'Class'}
+        title={selectedEvent ? (
+          <div className="calendar-event-modal-title-row">
+            <span className={`${selectedEvent.is_current ? 'calendar-active-zap' : 'calendar-title-icon'} calendar-title-zap`}>
+              <FiClock />
+            </span>
+            <span>{selectedEvent.batch_name}</span>
+            <span className={`calendar-event-status-pill ${selectedEventStatusUi.className}`}>
+              {selectedEventStatusUi.label}
+            </span>
+          </div>
+        ) : 'Class'}
         onClose={closeEventModal}
+        closeButtonText="×"
+        closeButtonAriaLabel="Close event details"
+        panelClassName="calendar-event-modal-panel"
+        headerClassName="calendar-event-modal-header"
+        titleClassName="calendar-event-modal-title"
+        closeButtonClassName="calendar-event-modal-close"
+        bodyClassName="calendar-event-modal-body-wrap"
       >
         {selectedEvent ? (
           <div className="calendar-modal-body">
-            <p><strong>Time:</strong> {new Date(selectedEvent.start_datetime).toLocaleString()} - {new Date(selectedEvent.end_datetime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-            <p><strong>Status:</strong> {selectedEvent.status}</p>
-            <p><strong>Students:</strong> {selectedEvent.student_count} | <strong>Fees:</strong> {selectedEvent.fee_due_count} | <strong>Risk:</strong> {selectedEvent.risk_count}</p>
-            {selectedSession?.topic_planned ? <p><strong>Plan:</strong> {selectedSession.topic_planned}</p> : null}
-            <div className="calendar-modal-actions">
-              <button type="button" className="calendar-action-btn">Open Attendance</button>
-              <button type="button" className="calendar-action-btn">View Batch</button>
-              <button type="button" className="calendar-action-btn" onClick={startEditFromSelection}>Edit Schedule</button>
-              <button type="button" className="calendar-action-btn danger">Cancel Class</button>
-              <button type="button" className="calendar-action-btn">Send Reminder</button>
+            <p className="calendar-event-modal-time">
+              <FiCalendar />
+              <span>{formatEventDateLine(selectedEvent.start_datetime, selectedEvent.end_datetime)}</span>
+            </p>
+            <div className="calendar-event-modal-metrics">
+              <span className="metric-students"><FiUsers /> {selectedEvent.student_count} Students</span>
+              <span className="metric-fee"><FaIndianRupeeSign /> {selectedEvent.fee_due_count} Fee Due</span>
+              <span className="metric-risk"><FiAlertTriangle /> {selectedEvent.risk_count} Risk</span>
             </div>
+            {selectedSession?.topic_planned ? <p className="calendar-event-modal-plan"><strong>Plan:</strong> {selectedSession.topic_planned}</p> : null}
+            <div className="calendar-modal-actions calendar-modal-actions-primary">
+              {!isSelectedEventFuture ? (
+                <button type="button" className="calendar-action-btn calendar-event-cta" onClick={handleOpenAttendance}>
+                  {isSelectedEventPast ? 'Attendance Review' : 'Open Attendance'}
+                </button>
+              ) : null}
+              <button type="button" className="calendar-action-btn" onClick={handleViewBatch}>View Batch</button>
+              {!isSelectedEventFinalized ? (
+                <button type="button" className="calendar-action-btn" onClick={startEditFromSelection}>Edit Schedule</button>
+              ) : null}
+            </div>
+            {!isSelectedEventFinalized ? (
+              <div className="calendar-modal-actions calendar-modal-actions-secondary">
+                <button type="button" className="calendar-action-btn calendar-action-btn-icon" onClick={handleSendReminder}>
+                  <FiBell /> Send Reminder
+                </button>
+                <button type="button" className="calendar-action-btn danger calendar-action-btn-icon" onClick={handleCancelClass}>
+                  <FiAlertTriangle /> Cancel Class
+                </button>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </Modal>

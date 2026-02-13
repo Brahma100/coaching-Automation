@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision = '20260211_0021'
-down_revision = '20260211_0020_calendar_schema_enhancements'
+down_revision = '20260211_0020'
 branch_labels = None
 depends_on = None
 

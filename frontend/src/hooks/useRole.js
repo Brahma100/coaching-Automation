@@ -1,6 +1,7 @@
 import React from 'react';
 
 import { fetchStudentMe, fetchTeacherProfile } from '../services/api';
+import { setGlobalToastDurationSeconds } from '../services/api';
 
 function useRole() {
   const [role, setRole] = React.useState('');
@@ -14,6 +15,7 @@ function useRole() {
         const profile = await fetchTeacherProfile();
         const roleValue = (profile?.role || '').toLowerCase();
         if (mounted) {
+          setGlobalToastDurationSeconds(profile?.ui_toast_duration_seconds ?? 5);
           setRole(roleValue);
           setIsAuthenticated(Boolean(roleValue));
         }

@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     enable_sheets_backup: bool = False
     sheet_id: str = ''
     google_credentials_json: str = ''
+    google_oauth_client_id: str = ''
+    google_oauth_client_secret: str = ''
+    google_oauth_redirect_uri: str = ''
+    google_drive_folder_id: str = ''
+    google_drive_oauth_scopes: str = 'https://www.googleapis.com/auth/drive.file'
     attendance_low_threshold: float = 0.75
     default_quiet_hours_start: str = '22:00'
     default_quiet_hours_end: str = '07:00'

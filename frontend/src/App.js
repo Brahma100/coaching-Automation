@@ -2,6 +2,8 @@ import React from 'react';
 import { Navigate, useRoutes } from 'react-router-dom';
 
 import PageLoader from './components/ui/PageLoader.jsx';
+import GlobalToastHost from './components/ui/GlobalToastHost.jsx';
+import { setGlobalApiErrorNotifier } from './services/api';
 
 const ProtectedRoute = React.lazy(() => import('./components/guards/ProtectedRoute.jsx'));
 const StudentProtectedRoute = React.lazy(() => import('./components/guards/StudentProtectedRoute.jsx'));
@@ -18,6 +20,7 @@ const Today = React.lazy(() => import('./pages/Today.jsx'));
 const TeacherCalendar = React.lazy(() => import('./pages/TeacherCalendar.jsx'));
 const Fees = React.lazy(() => import('./pages/Fees.jsx'));
 const Homework = React.lazy(() => import('./pages/Homework.jsx'));
+const Notes = React.lazy(() => import('./pages/Notes.jsx'));
 const Login = React.lazy(() => import('./pages/Login.jsx'));
 const Signup = React.lazy(() => import('./pages/Signup.jsx'));
 const Risk = React.lazy(() => import('./pages/Risk.jsx'));
@@ -33,6 +36,20 @@ const redirectDashboard = React.createElement(Navigate, { to: '/dashboard', repl
 const redirectLogin = React.createElement(Navigate, { to: '/login', replace: true });
 
 function App() {
+  const [toastEvent, setToastEvent] = React.useState(null);
+
+  React.useEffect(() => {
+    setGlobalApiErrorNotifier((payload) => {
+      setToastEvent({
+        tone: payload?.tone || 'error',
+        message: payload?.message || 'Request failed',
+        duration: payload?.duration || 5000,
+        nonce: Date.now(),
+      });
+    });
+    return () => setGlobalApiErrorNotifier(null);
+  }, []);
+
   const routes = useRoutes([
     { path: '/login', element: page(Login) },
     { path: '/signup', element: page(Signup) },
@@ -64,6 +81,7 @@ function App() {
             { path: '/attendance', element: page(Attendance) },
             { path: '/fees', element: page(Fees) },
             { path: '/homework', element: page(Homework) },
+            { path: '/notes', element: page(Notes) },
             { path: '/actions', element: page(Actions) },
             { path: '/risk', element: page(Risk) },
             { path: '/settings', element: page(Settings) }
@@ -84,9 +102,17 @@ function App() {
   ]);
 
   return React.createElement(
-    React.Suspense,
-    { fallback: React.createElement(PageLoader) },
-    routes
+    React.Fragment,
+    null,
+    React.createElement(
+      React.Suspense,
+      { fallback: React.createElement(PageLoader) },
+      routes
+    ),
+    React.createElement(GlobalToastHost, {
+      event: toastEvent,
+      onDone: () => setToastEvent(null),
+    })
   );
 }
 

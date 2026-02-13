@@ -1,5 +1,6 @@
 import React from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { useSearchParams } from 'react-router-dom';
 
 import Modal from '../components/Modal.jsx';
 import { PageSkeleton } from '../components/Skeleton.jsx';
@@ -29,6 +30,8 @@ const initialBatchForm = { name: '', subject: '', academic_level: '', active: tr
 const initialScheduleForm = { weekday: 0, start_time: '07:00', duration_minutes: 60 };
 
 function Batches() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedBatchId = Number(searchParams.get('batch_id') || 0) || null;
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState('');
   const [batches, setBatches] = React.useState([]);
@@ -57,10 +60,12 @@ function Batches() {
       setBatches(nextBatches);
       setStudents(nextStudents);
 
-      if (!selectedBatchId && nextBatches.length > 0) {
+      const hasPreferred = Boolean(requestedBatchId && nextBatches.some((row) => Number(row.id) === requestedBatchId));
+      if (hasPreferred) {
+        setSelectedBatchId(requestedBatchId);
+      } else if (!selectedBatchId && nextBatches.length > 0) {
         setSelectedBatchId(nextBatches[0].id);
-      }
-      if (selectedBatchId && !nextBatches.some((row) => row.id === selectedBatchId)) {
+      } else if (selectedBatchId && !nextBatches.some((row) => row.id === selectedBatchId)) {
         setSelectedBatchId(nextBatches[0]?.id || null);
       }
       setError('');
@@ -71,7 +76,15 @@ function Batches() {
     } finally {
       setLoading(false);
     }
-  }, [selectedBatchId]);
+  }, [requestedBatchId, selectedBatchId]);
+
+  React.useEffect(() => {
+    if (!selectedBatchId) return;
+    if (requestedBatchId === Number(selectedBatchId)) return;
+    const next = new URLSearchParams(searchParams);
+    next.set('batch_id', String(selectedBatchId));
+    setSearchParams(next, { replace: true });
+  }, [requestedBatchId, searchParams, selectedBatchId, setSearchParams]);
 
   React.useEffect(() => {
     loadData();
