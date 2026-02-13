@@ -5,15 +5,17 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 import json
 
-from sqlalchemy import func
+import httpx
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session, selectinload
 
 from app.cache import cache, cache_key
-from app.models import AttendanceRecord, AuthUser, Batch, BatchSchedule, CalendarOverride, ClassSession, FeeRecord, Room, Student, StudentBatchMap, StudentRiskProfile
+from app.models import AttendanceRecord, AuthUser, Batch, BatchSchedule, CalendarHoliday, CalendarOverride, ClassSession, FeeRecord, Room, Student, StudentBatchMap, StudentRiskProfile
 
 
 CALENDAR_TTL_SECONDS = 60
 VALID_VIEWS = {'day', 'week', 'month', 'agenda'}
+NAGER_HOLIDAY_URL = 'https://date.nager.at/api/v3/PublicHolidays/{year}/{country_code}'
 
 
 @dataclass(frozen=True)
@@ -146,8 +148,10 @@ def _session_status_label(
     end_dt: datetime,
     session: ClassSession | None,
 ) -> tuple[str, str]:
-    if session and session.status in ('cancelled', 'missed'):
+    if session and session.status == 'cancelled':
         return 'cancelled', 'cancelled'
+    if session and session.status == 'missed':
+        return 'completed', 'pending'
 
     if session and session.status in ('submitted', 'closed'):
         return 'completed', 'submitted'
@@ -227,18 +231,6 @@ def get_teacher_calendar_view(
         .order_by(BatchSchedule.weekday.asc(), BatchSchedule.start_time.asc(), BatchSchedule.id.asc())
         .all()
     )
-
-    if teacher_id:
-        teacher_batch_ids = {
-            int(batch_id)
-            for (batch_id,) in db.query(ClassSession.batch_id)
-            .filter(ClassSession.teacher_id == teacher_id)
-            .distinct()
-            .all()
-            if batch_id is not None
-        }
-        if teacher_batch_ids:
-            schedules = [row for row in schedules if row.batch_id in teacher_batch_ids]
 
     if not schedules:
         payload: list[dict[str, Any]] = []
@@ -321,7 +313,7 @@ def get_teacher_calendar_view(
         )
     }
 
-    now = datetime.utcnow()
+    now = datetime.now()
     payload: list[dict[str, Any]] = []
     for occurrence in occurrences:
         batch = batch_map.get(occurrence.batch_id)
@@ -406,6 +398,139 @@ def _apply_conflict_scores(items: list[dict[str, Any]]) -> None:
         item['conflict_score'] = conflicts
 
 
+def _fetch_public_holidays(country_code: str, year: int) -> list[dict[str, Any]]:
+    try:
+        response = httpx.get(
+            NAGER_HOLIDAY_URL.format(year=year, country_code=country_code),
+            timeout=12.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, list):
+            rows = [row for row in payload if isinstance(row, dict)]
+            if rows:
+                return rows
+    except Exception:
+        pass
+
+    try:
+        import holidays as pyholidays
+
+        holiday_items = pyholidays.country_holidays(country_code, years=[year])
+        return [
+            {
+                'date': holiday_date.isoformat(),
+                'name': name,
+                'localName': name,
+                'global': True,
+            }
+            for holiday_date, name in holiday_items.items()
+        ]
+    except Exception:
+        return []
+
+
+def sync_calendar_holidays(
+    db: Session,
+    *,
+    country_code: str = 'IN',
+    start_year: int | None = None,
+    years: int = 5,
+) -> dict[str, Any]:
+    clean_country = (country_code or 'IN').upper().strip()
+    if len(clean_country) != 2:
+        raise ValueError('country_code must be a 2-letter ISO country code')
+
+    clean_years = int(years or 0)
+    if clean_years < 1 or clean_years > 10:
+        raise ValueError('years must be between 1 and 10')
+
+    base_year = int(start_year or date.today().year)
+    fetched_years: list[int] = []
+    total_rows = 0
+
+    for year in range(base_year, base_year + clean_years):
+        rows = _fetch_public_holidays(clean_country, year)
+
+        db.query(CalendarHoliday).filter(
+            CalendarHoliday.country_code == clean_country,
+            CalendarHoliday.year == year,
+        ).delete(synchronize_session=False)
+
+        mapped_rows: list[CalendarHoliday] = []
+        seen = set()
+        for row in rows:
+            raw_date = row.get('date')
+            raw_name = (row.get('name') or '').strip()
+            if not raw_date or not raw_name:
+                continue
+            try:
+                holiday_date = date.fromisoformat(str(raw_date))
+            except ValueError:
+                continue
+
+            dedupe_key = (holiday_date, raw_name.lower())
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+
+            mapped_rows.append(
+                CalendarHoliday(
+                    country_code=clean_country,
+                    holiday_date=holiday_date,
+                    year=holiday_date.year,
+                    name=raw_name,
+                    local_name=(row.get('localName') or raw_name).strip(),
+                    source='nager',
+                    is_national=bool(row.get('global', True)),
+                )
+            )
+
+        if mapped_rows:
+            db.add_all(mapped_rows)
+            total_rows += len(mapped_rows)
+        fetched_years.append(year)
+
+    db.commit()
+    clear_teacher_calendar_cache()
+    return {
+        'country_code': clean_country,
+        'start_year': base_year,
+        'years': clean_years,
+        'fetched_years': fetched_years,
+        'total_rows': total_rows,
+    }
+
+
+def get_calendar_holidays(
+    db: Session,
+    *,
+    start_date: date,
+    end_date: date,
+    country_code: str = 'IN',
+) -> list[dict[str, Any]]:
+    clean_country = (country_code or 'IN').upper().strip()
+    rows = (
+        db.query(CalendarHoliday)
+        .filter(
+            CalendarHoliday.country_code == clean_country,
+            CalendarHoliday.holiday_date >= start_date,
+            CalendarHoliday.holiday_date <= end_date,
+        )
+        .order_by(CalendarHoliday.holiday_date.asc(), CalendarHoliday.name.asc())
+        .all()
+    )
+    return [
+        {
+            'date': row.holiday_date.isoformat(),
+            'name': row.name,
+            'local_name': row.local_name or row.name,
+            'is_national': bool(row.is_national),
+        }
+        for row in rows
+    ]
+
+
 def get_teacher_calendar(
     db: Session,
     teacher_id: int,
@@ -445,8 +570,16 @@ def get_teacher_calendar(
             prefs['enable_live_mode_auto_open'] = bool(
                 user.enable_live_mode_auto_open if user.enable_live_mode_auto_open is not None else True
             )
+    holidays = get_calendar_holidays(
+        db,
+        start_date=start_date,
+        end_date=end_date,
+        country_code='IN',
+    )
+
     return {
         'items': items,
+        'holidays': holidays,
         'preferences': json.dumps(
             prefs
             or {
@@ -543,7 +676,7 @@ def get_calendar_session_detail(db: Session, session_id: int) -> dict[str, Any] 
     if not row:
         return None
     end_dt = row.scheduled_start + timedelta(minutes=int(row.duration_minutes or 60))
-    now = datetime.utcnow()
+    now = datetime.now()
     status, attendance_status = _session_status_label(
         now=now,
         start_dt=row.scheduled_start,
@@ -595,19 +728,33 @@ def get_teacher_calendar_analytics(
         if cached is not None:
             return cached
 
-    if not teacher_id:
-        payload = {'range': {'start': start_date.isoformat(), 'end': end_date.isoformat()}, 'days': []}
-        cache.set_cached(cache_token, payload, ttl=CALENDAR_TTL_SECONDS)
-        return payload
+    if teacher_id:
+        teacher_batch_ids = {
+            int(batch_id)
+            for (batch_id,) in db.query(ClassSession.batch_id)
+            .filter(ClassSession.teacher_id == teacher_id)
+            .distinct()
+            .all()
+            if batch_id is not None
+        }
+    else:
+        teacher_batch_ids = set()
 
-    teacher_batch_ids = {
-        int(batch_id)
-        for (batch_id,) in db.query(ClassSession.batch_id)
-        .filter(ClassSession.teacher_id == teacher_id)
-        .distinct()
-        .all()
-        if batch_id is not None
-    }
+    # Fallback to active scheduled batches so analytics scope matches calendar scope,
+    # especially for admin/global view (teacher_id=0) and for setups without class_sessions yet.
+    if not teacher_batch_ids:
+        teacher_batch_ids = {
+            int(batch_id)
+            for (batch_id,) in (
+                db.query(BatchSchedule.batch_id)
+                .join(Batch, Batch.id == BatchSchedule.batch_id)
+                .filter(Batch.active.is_(True))
+                .distinct()
+                .all()
+            )
+            if batch_id is not None
+        }
+
     if not teacher_batch_ids:
         payload = {'range': {'start': start_date.isoformat(), 'end': end_date.isoformat()}, 'days': []}
         cache.set_cached(cache_token, payload, ttl=CALENDAR_TTL_SECONDS)
@@ -624,7 +771,7 @@ def get_teacher_calendar_analytics(
     )
 
     present_case = func.sum(
-        func.case(
+        case(
             (AttendanceRecord.status.in_(['Present', 'Late']), 1),
             else_=0,
         )

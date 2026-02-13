@@ -12,8 +12,10 @@ from app.services.auth_service import validate_session_token
 from app.services.teacher_calendar_service import (
     clear_teacher_calendar_cache,
     get_calendar_session_detail,
+    get_calendar_holidays,
     get_teacher_calendar,
     get_teacher_calendar_analytics,
+    sync_calendar_holidays,
     validate_calendar_conflicts,
 )
 
@@ -98,16 +100,32 @@ def create_override(
     _: dict = Depends(_require_teacher_or_admin),
     db: Session = Depends(get_db),
 ):
-    row = CalendarOverride(
-        institute_id=0,
-        batch_id=payload.batch_id,
-        override_date=payload.override_date,
-        new_start_time=payload.new_start_time,
-        new_duration_minutes=payload.new_duration_minutes,
-        cancelled=payload.cancelled,
-        reason=(payload.reason or '').strip(),
+    row = (
+        db.query(CalendarOverride)
+        .filter(
+            CalendarOverride.batch_id == payload.batch_id,
+            CalendarOverride.override_date == payload.override_date,
+        )
+        .order_by(CalendarOverride.id.desc())
+        .first()
     )
-    db.add(row)
+    if row:
+        row.new_start_time = payload.new_start_time
+        row.new_duration_minutes = payload.new_duration_minutes
+        row.cancelled = payload.cancelled
+        row.reason = (payload.reason or '').strip()
+        row.institute_id = row.institute_id or 0
+    else:
+        row = CalendarOverride(
+            institute_id=0,
+            batch_id=payload.batch_id,
+            override_date=payload.override_date,
+            new_start_time=payload.new_start_time,
+            new_duration_minutes=payload.new_duration_minutes,
+            cancelled=payload.cancelled,
+            reason=(payload.reason or '').strip(),
+        )
+        db.add(row)
     db.commit()
     db.refresh(row)
     clear_teacher_calendar_cache()
@@ -201,7 +219,7 @@ def validate_conflicts(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get('/{session_id}')
+@router.get('/session/{session_id}')
 def get_calendar_session(
     session_id: int,
     request: Request,
@@ -247,4 +265,50 @@ def get_calendar_analytics(
     return {
         'teacher_id': effective_teacher_id,
         **payload,
+    }
+
+
+@router.post('/holidays/sync')
+def sync_holidays(
+    request: Request,
+    start_year: int | None = Query(default=None, ge=2000, le=2100),
+    years: int = Query(default=5, ge=1, le=10),
+    country_code: str = Query(default='IN', min_length=2, max_length=2),
+    _: dict = Depends(_require_teacher_or_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        payload = sync_calendar_holidays(
+            db,
+            country_code=country_code,
+            start_year=start_year,
+            years=years,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return payload
+
+
+@router.get('/holidays')
+def list_holidays(
+    request: Request,
+    start: date = Query(...),
+    end: date = Query(...),
+    country_code: str = Query(default='IN', min_length=2, max_length=2),
+    _: dict = Depends(_require_teacher_or_admin),
+    db: Session = Depends(get_db),
+):
+    if end < start:
+        raise HTTPException(status_code=400, detail='end must be greater than or equal to start')
+    payload = get_calendar_holidays(
+        db,
+        start_date=start,
+        end_date=end,
+        country_code=country_code,
+    )
+    return {
+        'start': start.isoformat(),
+        'end': end.isoformat(),
+        'country_code': country_code.upper(),
+        'holidays': payload,
     }

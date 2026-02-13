@@ -4,6 +4,8 @@ import {
   FiBarChart2,
   FiBell,
   FiCalendar,
+  FiChevronLeft,
+  FiChevronRight,
   FiBookOpen,
   FiClock,
   FiGrid,
@@ -37,6 +39,10 @@ function DashboardLayout() {
   const { isDark, toggleTheme } = useTheme();
   const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false);
   const [userMenuOpen, setUserMenuOpen] = React.useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('dashboard.sidebar.collapsed') === '1';
+  });
   const { isAdmin } = useRole();
   const userMenuRef = React.useRef(null);
 
@@ -61,15 +67,21 @@ function DashboardLayout() {
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
 
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('dashboard.sidebar.collapsed', sidebarCollapsed ? '1' : '0');
+  }, [sidebarCollapsed]);
+
   const primaryMenu = React.useMemo(() => {
     const base = [
       { to: '/today', label: 'Today View', icon: FiClock },
       { to: '/calendar', label: 'Teacher Calendar', icon: FiCalendar },
       { to: '/dashboard', label: 'Dashboard', icon: FiGrid },
-      { to: '/attendance', label: 'Manage Attendance', icon: FiBookOpen },
-      { to: '/students', label: 'Manage Students', icon: FiUserCheck },
-      { to: '/batches', label: 'Manage Batch', icon: FiCalendar },
-      { to: '/risk', label: 'Skill Progress', icon: FiBarChart2 },
+        { to: '/attendance', label: 'Manage Attendance', icon: FiBookOpen },
+        { to: '/students', label: 'Manage Students', icon: FiUserCheck },
+        { to: '/batches', label: 'Manage Batch', icon: FiCalendar },
+        { to: '/notes', label: 'Notes', icon: FiBell },
+        { to: '/risk', label: 'Skill Progress', icon: FiBarChart2 },
       { to: '/actions', label: 'Pending Actions', icon: FiUserX }
     ];
     if (isAdmin) {
@@ -78,20 +90,22 @@ function DashboardLayout() {
     return base;
   }, [isAdmin]);
 
-  const renderSidebarContent = () => (
+  const renderSidebarContent = ({ collapsed = false, mobile = false } = {}) => (
     <>
       <div className="mb-8 flex items-center justify-between">
-        <h1 className="text-[30px] font-extrabold tracking-tight">
+        <h1 className={`font-extrabold tracking-tight ${collapsed ? 'text-[22px]' : 'text-[30px]'}`}>
           <span className="text-[#48bf6d]">Learning</span>
-          <span className="text-[#2f7bf6]">Mate</span>
+          {!collapsed ? <span className="text-[#2f7bf6]">Mate</span> : null}
         </h1>
-        <button
-          type="button"
-          onClick={closeMobileSidebar}
-          className="rounded-lg border border-slate-200 p-2 text-slate-600 lg:hidden dark:border-slate-700 dark:text-slate-300"
-        >
-          <FiX />
-        </button>
+        {mobile ? (
+          <button
+            type="button"
+            onClick={closeMobileSidebar}
+            className="rounded-lg border border-slate-200 p-2 text-slate-600 lg:hidden dark:border-slate-700 dark:text-slate-300"
+          >
+            <FiX />
+          </button>
+        ) : null}
       </div>
 
       <nav className="space-y-2">
@@ -100,8 +114,11 @@ function DashboardLayout() {
             key={`${item.to}-${item.label}`}
             to={item.to}
             onClick={closeMobileSidebar}
+            title={collapsed ? item.label : undefined}
             className={({ isActive }) =>
-              `flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold transition ${
+              `flex items-center rounded-xl px-4 py-3 text-sm font-semibold transition ${
+                collapsed ? 'justify-center px-3' : 'gap-3'
+              } ${
                 isActive
                   ? 'bg-[#e6f0ff] text-[#2f7bf6] dark:bg-slate-800 dark:text-[#66a3ff]'
                   : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
@@ -109,7 +126,7 @@ function DashboardLayout() {
             }
           >
             <item.icon className="h-4 w-4" />
-            {item.label}
+            {!collapsed ? item.label : null}
           </NavLink>
         ))}
       </nav>
@@ -122,8 +139,11 @@ function DashboardLayout() {
             key={`${item.to}-${item.label}`}
             to={item.to}
             onClick={closeMobileSidebar}
+            title={collapsed ? item.label : undefined}
             className={({ isActive }) =>
-              `flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold transition ${
+              `flex items-center rounded-xl px-4 py-3 text-sm font-semibold transition ${
+                collapsed ? 'justify-center px-3' : 'gap-3'
+              } ${
                 isActive
                   ? 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-100'
                   : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
@@ -131,19 +151,21 @@ function DashboardLayout() {
             }
           >
             <item.icon className="h-4 w-4" />
-            {item.label}
+            {!collapsed ? item.label : null}
           </NavLink>
         ))}
       </nav>
 
-      <div className="mt-8 rounded-2xl bg-[#f0f4ff] p-4 text-center shadow-sm dark:bg-slate-800">
-        <div className="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-full bg-gradient-to-br from-[#5b5cff] to-[#2f7bf6] text-white">
-          <HiOutlineUserGroup className="h-8 w-8" />
+      {!collapsed ? (
+        <div className="mt-8 rounded-2xl bg-[#f0f4ff] p-4 text-center shadow-sm dark:bg-slate-800">
+          <div className="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-full bg-gradient-to-br from-[#5b5cff] to-[#2f7bf6] text-white">
+            <HiOutlineUserGroup className="h-8 w-8" />
+          </div>
+          <p className="text-lg font-bold text-slate-800 dark:text-slate-100">Student Group</p>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-300">Create a study group and chat with students.</p>
+          <button className="mt-3 rounded-full bg-[#2f7bf6] px-4 py-2 text-sm font-semibold text-white">Create Group</button>
         </div>
-        <p className="text-lg font-bold text-slate-800 dark:text-slate-100">Student Group</p>
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-300">Create a study group and chat with students.</p>
-        <button className="mt-3 rounded-full bg-[#2f7bf6] px-4 py-2 text-sm font-semibold text-white">Create Group</button>
-      </div>
+      ) : null}
     </>
   );
 
@@ -158,9 +180,9 @@ function DashboardLayout() {
         />
       ) : null}
 
-      <div className="mx-auto w-full lg:grid lg:grid-cols-[280px,1fr]">
-        <aside className="hidden min-h-screen border-r border-slate-200 bg-white px-6 py-8 dark:border-slate-800 dark:bg-slate-900 lg:block">
-          {renderSidebarContent()}
+      <div className={`mx-auto w-full lg:grid ${sidebarCollapsed ? 'lg:grid-cols-[88px,1fr]' : 'lg:grid-cols-[280px,1fr]'}`}>
+        <aside className={`hidden min-h-screen border-r border-slate-200 bg-white py-8 dark:border-slate-800 dark:bg-slate-900 lg:block ${sidebarCollapsed ? 'px-3' : 'px-6'}`}>
+          {renderSidebarContent({ collapsed: sidebarCollapsed })}
         </aside>
 
         <aside
@@ -168,7 +190,7 @@ function DashboardLayout() {
             mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
         >
-          {renderSidebarContent()}
+          {renderSidebarContent({ mobile: true })}
         </aside>
 
         <div className="min-w-0">
@@ -180,6 +202,14 @@ function DashboardLayout() {
                 className="grid h-10 w-10 place-items-center rounded-lg border border-slate-200 text-slate-600 lg:hidden dark:border-slate-700 dark:text-slate-300"
               >
                 <FiMenu />
+              </button>
+              <button
+                type="button"
+                onClick={() => setSidebarCollapsed((prev) => !prev)}
+                aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                className="hidden h-10 w-10 place-items-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 lg:grid dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                {sidebarCollapsed ? <FiChevronRight /> : <FiChevronLeft />}
               </button>
 
               <div className="min-w-0 flex-1">

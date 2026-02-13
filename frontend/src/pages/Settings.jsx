@@ -1,8 +1,9 @@
 import React from 'react';
 import { FiBell, FiCalendar, FiMoon, FiPhone, FiShield, FiSun, FiUser } from 'react-icons/fi';
 
+import useRole from '../hooks/useRole';
 import useTheme from '../hooks/useTheme';
-import { fetchTeacherProfile, fetchTodayBrief, updateTeacherProfile } from '../services/api';
+import { fetchTeacherProfile, fetchTodayBrief, setGlobalToastDurationSeconds, updateTeacherProfile } from '../services/api';
 
 function formatDateTime(value) {
   if (!value) return 'Not available';
@@ -19,12 +20,15 @@ function formatDateTime(value) {
 
 function Settings() {
   const { isDark, toggleTheme } = useTheme();
+  const { isAdmin } = useRole();
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState('');
   const [brief, setBrief] = React.useState(null);
   const [notificationsOn, setNotificationsOn] = React.useState(true);
   const [profile, setProfile] = React.useState(null);
   const [deleteMinutes, setDeleteMinutes] = React.useState(15);
+  const [enableAutoDeleteNotesOnExpiry, setEnableAutoDeleteNotesOnExpiry] = React.useState(false);
+  const [toastDurationSeconds, setToastDurationSeconds] = React.useState(5);
   const [savingProfile, setSavingProfile] = React.useState(false);
 
   React.useEffect(() => {
@@ -36,6 +40,9 @@ function Settings() {
           setBrief(briefPayload || null);
           setProfile(profilePayload || null);
           setDeleteMinutes(profilePayload?.notification_delete_minutes ?? 15);
+          setEnableAutoDeleteNotesOnExpiry(Boolean(profilePayload?.enable_auto_delete_notes_on_expiry));
+          setToastDurationSeconds(profilePayload?.ui_toast_duration_seconds ?? 5);
+          setGlobalToastDurationSeconds(profilePayload?.ui_toast_duration_seconds ?? 5);
           setError('');
         }
       } catch (err) {
@@ -54,8 +61,19 @@ function Settings() {
   const saveProfile = async () => {
     setSavingProfile(true);
     try {
-      const payload = await updateTeacherProfile({ notification_delete_minutes: Number(deleteMinutes) });
-      setProfile((prev) => ({ ...(prev || {}), notification_delete_minutes: payload.notification_delete_minutes }));
+      const payload = await updateTeacherProfile({
+        notification_delete_minutes: Number(deleteMinutes),
+        enable_auto_delete_notes_on_expiry: Boolean(enableAutoDeleteNotesOnExpiry),
+        ui_toast_duration_seconds: Number(toastDurationSeconds),
+      });
+      setProfile((prev) => ({
+        ...(prev || {}),
+        notification_delete_minutes: payload.notification_delete_minutes,
+        enable_auto_delete_notes_on_expiry: Boolean(payload.enable_auto_delete_notes_on_expiry),
+        ui_toast_duration_seconds: payload.ui_toast_duration_seconds ?? 5,
+      }));
+      setToastDurationSeconds(payload.ui_toast_duration_seconds ?? 5);
+      setGlobalToastDurationSeconds(payload.ui_toast_duration_seconds ?? 5);
       setError('');
     } catch (err) {
       setError(err?.response?.data?.detail || err?.message || 'Could not update profile');
@@ -157,6 +175,70 @@ function Settings() {
                 </button>
               </div>
             </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Notes Auto Delete</p>
+              <p className="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">
+                {enableAutoDeleteNotesOnExpiry ? 'Enabled' : 'Disabled'}
+              </p>
+              <label className="mt-3 inline-flex cursor-pointer items-center gap-3 text-sm text-slate-700 dark:text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={enableAutoDeleteNotesOnExpiry}
+                  onChange={(event) => setEnableAutoDeleteNotesOnExpiry(event.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-[#2f7bf6] focus:ring-[#2f7bf6]"
+                />
+                Enable Auto Delete Notes on Expiry
+              </label>
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={saveProfile}
+                  disabled={savingProfile}
+                  className="rounded-lg bg-[#2f7bf6] px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Toast Duration</p>
+              <p className="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">{toastDurationSeconds} sec</p>
+              <div className="mt-3 flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={toastDurationSeconds}
+                  onChange={(event) => setToastDurationSeconds(event.target.value)}
+                  className="w-24 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+                />
+                <button
+                  type="button"
+                  onClick={saveProfile}
+                  disabled={savingProfile}
+                  className="rounded-lg bg-[#2f7bf6] px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+
+            {isAdmin ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Google Drive</p>
+                <p className="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">Connect OAuth</p>
+                <a
+                  href="/backend/api/drive/oauth/start"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-3 inline-flex items-center rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200"
+                >
+                  Connect Google Drive
+                </a>
+              </div>
+            ) : null}
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">

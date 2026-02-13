@@ -1,14 +1,12 @@
 import React from 'react';
-import { useDroppable } from '@dnd-kit/core';
 
 import HeatmapOverlay from './HeatmapOverlay.jsx';
 
-function CalendarDayColumn({ dayKey, slots, children, isToday, currentTimeLine, heatmapClass, heatmapEnabled }) {
-  const { setNodeRef, isOver } = useDroppable({ id: dayKey });
-
+function CalendarDayColumn({ dayKey, slots, children, isToday, currentTimeLine, heatmapClass, heatmapEnabled, holidayLabel }) {
   return (
-    <div ref={setNodeRef} className={`calendar-day-column ${isOver ? 'drag-over' : ''}`}>
+    <div className={`calendar-day-column ${isToday ? 'today' : ''}`}>
       {heatmapEnabled ? <HeatmapOverlay className={heatmapClass} /> : null}
+      {holidayLabel ? <div className="calendar-day-holiday" title={holidayLabel}>{holidayLabel}</div> : null}
       {slots.map((slot) => (
         <div key={`${dayKey}-${slot}`} className="calendar-cell" />
       ))}

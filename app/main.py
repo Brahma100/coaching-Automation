@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.db import Base, SessionLocal, engine
-from app.routers import actions, admin_allowlist, admin_ops, allowlist_admin, allowlist_admin_ui, attendance, attendance_manage_ui, attendance_session_api, attendance_session_ui, auth, batches_ui, catalog, class_session, communications, dashboard, dashboard_today, fee, homework, inbox, offers, parents, referral, rules, session_summary_api, session_summary_ui, student_api, student_risk, student_ui, students_ui, teacher_brief, teacher_calendar, teacher_profile, tokens, ui
+from app.routers import actions, admin_allowlist, admin_ops, allowlist_admin, allowlist_admin_ui, attendance, attendance_manage_ui, attendance_session_api, attendance_session_ui, auth, batches_ui, catalog, class_session, communications, dashboard, dashboard_today, drive_oauth, fee, homework, inbox, notes, offers, parents, referral, rules, session_summary_api, session_summary_ui, student_api, student_risk, student_ui, students_ui, teacher_brief, teacher_calendar, teacher_profile, tokens, ui
 from app.scheduler import start_scheduler, stop_scheduler
 from app.session_middleware import SessionAuthMiddleware
 from app.route_logging import EndpointNameRoute
@@ -62,6 +62,8 @@ app.include_router(dashboard.router)
 app.include_router(dashboard_today.router)
 app.include_router(referral.router)
 app.include_router(homework.router)
+app.include_router(notes.router)
+app.include_router(drive_oauth.router)
 app.include_router(inbox.router)
 app.include_router(communications.router)
 app.include_router(class_session.router)

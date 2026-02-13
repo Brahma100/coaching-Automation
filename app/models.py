@@ -49,6 +49,18 @@ class Batch(Base):
     boards: Mapped[list['Board']] = relationship('Board', secondary='batch_boards', back_populates='batches')
     levels: Mapped[list['ClassLevel']] = relationship('ClassLevel', secondary='batch_levels', back_populates='batches')
     subjects: Mapped[list['Subject']] = relationship('Subject', secondary='batch_subjects', back_populates='batches')
+    note_links: Mapped[list['NoteBatch']] = relationship(
+        'NoteBatch',
+        back_populates='batch',
+        cascade='all, delete-orphan',
+        overlaps='notes,batches',
+    )
+    notes: Mapped[list['Note']] = relationship(
+        'Note',
+        secondary='note_batches',
+        back_populates='batches',
+        overlaps='note_links,batch_links,batch,note',
+    )
 
 
 class Program(Base):
@@ -98,6 +110,187 @@ class Subject(Base):
 
     batch_links: Mapped[list['BatchSubject']] = relationship('BatchSubject', back_populates='subject', cascade='all, delete-orphan')
     batches: Mapped[list['Batch']] = relationship('Batch', secondary='batch_subjects', back_populates='subjects')
+    chapters: Mapped[list['Chapter']] = relationship('Chapter', back_populates='subject', cascade='all, delete-orphan')
+    notes: Mapped[list['Note']] = relationship('Note', back_populates='subject')
+
+
+class Chapter(Base):
+    __tablename__ = 'chapters'
+    __table_args__ = (
+        UniqueConstraint('subject_id', 'name', name='uq_chapter_subject_name'),
+        Index('ix_chapters_subject_name', 'subject_id', 'name'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey('subjects.id'), index=True)
+    name: Mapped[str] = mapped_column(String(120), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    subject: Mapped['Subject'] = relationship('Subject', back_populates='chapters')
+    topics: Mapped[list['Topic']] = relationship('Topic', back_populates='chapter', cascade='all, delete-orphan')
+    notes: Mapped[list['Note']] = relationship('Note', back_populates='chapter')
+
+
+class Topic(Base):
+    __tablename__ = 'topics'
+    __table_args__ = (
+        Index('ix_topics_chapter_parent_name', 'chapter_id', 'parent_topic_id', 'name'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    chapter_id: Mapped[int] = mapped_column(ForeignKey('chapters.id'), index=True)
+    parent_topic_id: Mapped[int | None] = mapped_column(ForeignKey('topics.id'), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    chapter: Mapped['Chapter'] = relationship('Chapter', back_populates='topics')
+    parent_topic: Mapped['Topic | None'] = relationship('Topic', remote_side='Topic.id', back_populates='child_topics')
+    child_topics: Mapped[list['Topic']] = relationship('Topic', back_populates='parent_topic')
+    notes: Mapped[list['Note']] = relationship('Note', back_populates='topic')
+
+
+class Note(Base):
+    __tablename__ = 'notes'
+    __table_args__ = (
+        Index('ix_notes_subject_topic_created', 'subject_id', 'topic_id', 'created_at'),
+        Index('ix_notes_release_expire', 'release_at', 'expire_at'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    title: Mapped[str] = mapped_column(String(200), index=True)
+    description: Mapped[str] = mapped_column(Text, default='')
+    subject_id: Mapped[int] = mapped_column(ForeignKey('subjects.id'), index=True)
+    chapter_id: Mapped[int | None] = mapped_column(ForeignKey('chapters.id'), nullable=True, index=True)
+    topic_id: Mapped[int | None] = mapped_column(ForeignKey('topics.id'), nullable=True, index=True)
+    drive_file_id: Mapped[str] = mapped_column(String(255), index=True)
+    file_size: Mapped[int] = mapped_column(Integer, default=0)
+    mime_type: Mapped[str] = mapped_column(String(120), default='application/pdf')
+    uploaded_by: Mapped[int] = mapped_column(Integer, index=True)
+    visible_to_students: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    visible_to_parents: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    release_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    expire_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    subject: Mapped['Subject'] = relationship('Subject', back_populates='notes')
+    chapter: Mapped['Chapter | None'] = relationship('Chapter', back_populates='notes')
+    topic: Mapped['Topic | None'] = relationship('Topic', back_populates='notes')
+    batch_links: Mapped[list['NoteBatch']] = relationship(
+        'NoteBatch',
+        back_populates='note',
+        cascade='all, delete-orphan',
+        overlaps='notes,batches',
+    )
+    batches: Mapped[list['Batch']] = relationship(
+        'Batch',
+        secondary='note_batches',
+        back_populates='notes',
+        overlaps='note_links,batch_links,batch,note',
+    )
+    tag_links: Mapped[list['NoteTag']] = relationship(
+        'NoteTag',
+        back_populates='note',
+        cascade='all, delete-orphan',
+        overlaps='notes,tags',
+    )
+    tags: Mapped[list['Tag']] = relationship(
+        'Tag',
+        secondary='note_tags',
+        back_populates='notes',
+        overlaps='tag_links,note_links,note,tag',
+    )
+    versions: Mapped[list['NoteVersion']] = relationship(
+        'NoteVersion',
+        back_populates='note',
+        cascade='all, delete-orphan',
+        order_by='NoteVersion.version_number.desc()',
+    )
+    download_logs: Mapped[list['NoteDownloadLog']] = relationship('NoteDownloadLog', back_populates='note', cascade='all, delete-orphan')
+
+
+class NoteBatch(Base):
+    __tablename__ = 'note_batches'
+    __table_args__ = (
+        UniqueConstraint('note_id', 'batch_id', name='uq_note_batch_note_batch'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    note_id: Mapped[int] = mapped_column(ForeignKey('notes.id'), index=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
+
+    note: Mapped['Note'] = relationship('Note', back_populates='batch_links', overlaps='batches,notes')
+    batch: Mapped['Batch'] = relationship('Batch', back_populates='note_links', overlaps='batches,notes')
+
+
+class Tag(Base):
+    __tablename__ = 'tags'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    note_links: Mapped[list['NoteTag']] = relationship(
+        'NoteTag',
+        back_populates='tag',
+        cascade='all, delete-orphan',
+        overlaps='notes,tags',
+    )
+    notes: Mapped[list['Note']] = relationship(
+        'Note',
+        secondary='note_tags',
+        back_populates='tags',
+        overlaps='tag_links,note_links,note,tag',
+    )
+
+
+class NoteTag(Base):
+    __tablename__ = 'note_tags'
+    __table_args__ = (
+        UniqueConstraint('note_id', 'tag_id', name='uq_note_tag_note_tag'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    note_id: Mapped[int] = mapped_column(ForeignKey('notes.id'), index=True)
+    tag_id: Mapped[int] = mapped_column(ForeignKey('tags.id'), index=True)
+
+    note: Mapped['Note'] = relationship('Note', back_populates='tag_links', overlaps='notes,tags')
+    tag: Mapped['Tag'] = relationship('Tag', back_populates='note_links', overlaps='notes,tags')
+
+
+class NoteVersion(Base):
+    __tablename__ = 'note_versions'
+    __table_args__ = (
+        UniqueConstraint('note_id', 'version_number', name='uq_note_version_note_number'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    note_id: Mapped[int] = mapped_column(ForeignKey('notes.id'), index=True)
+    version_number: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    drive_file_id: Mapped[str] = mapped_column(String(255), index=True)
+    file_size: Mapped[int] = mapped_column(Integer, default=0)
+    mime_type: Mapped[str] = mapped_column(String(120), default='application/pdf')
+    uploaded_by: Mapped[int] = mapped_column(Integer, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    note: Mapped['Note'] = relationship('Note', back_populates='versions')
+
+
+class NoteDownloadLog(Base):
+    __tablename__ = 'note_download_logs'
+    __table_args__ = (
+        Index('ix_note_download_logs_note_student', 'note_id', 'student_id'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    note_id: Mapped[int] = mapped_column(ForeignKey('notes.id'), index=True)
+    student_id: Mapped[int | None] = mapped_column(ForeignKey('students.id'), nullable=True, index=True)
+    batch_id: Mapped[int | None] = mapped_column(ForeignKey('batches.id'), nullable=True, index=True)
+    downloaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    ip_address: Mapped[str] = mapped_column(String(64), default='')
+    user_agent: Mapped[str] = mapped_column(String(255), default='')
+
+    note: Mapped['Note'] = relationship('Note', back_populates='download_logs')
 
 
 class BatchProgram(Base):
@@ -421,12 +614,27 @@ class AuthUser(Base):
     password_hash: Mapped[str] = mapped_column(String(255), default='')
     google_sub: Mapped[str] = mapped_column(String(255), default='', index=True)
     notification_delete_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    enable_auto_delete_notes_on_expiry: Mapped[bool] = mapped_column(Boolean, default=False)
+    ui_toast_duration_seconds: Mapped[int] = mapped_column(Integer, default=5)
     time_zone: Mapped[str] = mapped_column(String(60), default='UTC')
     calendar_preferences: Mapped[str] = mapped_column(Text, default='{}')
     calendar_view_preference: Mapped[str] = mapped_column(String(20), default='week')
     calendar_snap_minutes: Mapped[int] = mapped_column(Integer, default=15)
     enable_live_mode_auto_open: Mapped[bool] = mapped_column(Boolean, default=True)
     default_event_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+
+class DriveOAuthToken(Base):
+    __tablename__ = 'drive_oauth_tokens'
+    __table_args__ = (
+        UniqueConstraint('user_id', name='uq_drive_oauth_token_user'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    refresh_token: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
 
 
 class AllowedUser(Base):
@@ -557,3 +765,23 @@ class CalendarOverride(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
 
     batch: Mapped['Batch'] = relationship('Batch')
+
+
+class CalendarHoliday(Base):
+    __tablename__ = 'calendar_holidays'
+    __table_args__ = (
+        UniqueConstraint('country_code', 'holiday_date', 'name', name='uq_calendar_holidays_country_date_name'),
+        Index('ix_calendar_holidays_country_date', 'country_code', 'holiday_date'),
+        Index('ix_calendar_holidays_year_country', 'year', 'country_code'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    country_code: Mapped[str] = mapped_column(String(2), default='IN', index=True)
+    holiday_date: Mapped[date] = mapped_column(Date, index=True)
+    year: Mapped[int] = mapped_column(Integer, index=True)
+    name: Mapped[str] = mapped_column(String(180))
+    local_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    source: Mapped[str] = mapped_column(String(40), default='nager')
+    is_national: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)

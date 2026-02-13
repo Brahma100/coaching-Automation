@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models import AuthUser, Batch, BatchSchedule, Student, StudentBatchMap
 from app.services.comms_service import queue_teacher_telegram
 from app.services.daily_teacher_brief_service import resolve_teacher_chat_id
+from app.services.teacher_calendar_service import clear_teacher_calendar_cache
 from app.services.batch_membership_service import (
     deactivate_student_batch_mapping,
     ensure_active_student_batch_mapping,
@@ -85,6 +86,7 @@ def create_batch(
     db.add(row)
     db.commit()
     db.refresh(row)
+    clear_teacher_calendar_cache()
     _notify_batch_change(db, action='created', batch=row, actor=actor)
     return row
 
@@ -120,6 +122,7 @@ def update_batch(
     row.active = bool(active)
     db.commit()
     db.refresh(row)
+    clear_teacher_calendar_cache()
     _notify_batch_change(db, action='updated', batch=row, actor=actor)
     return row
 
@@ -131,6 +134,7 @@ def soft_delete_batch(db: Session, batch_id: int, actor: dict | None = None) -> 
     row.active = False
     db.commit()
     db.refresh(row)
+    clear_teacher_calendar_cache()
     _notify_batch_change(db, action='deleted', batch=row, actor=actor)
     return row
 
@@ -161,6 +165,7 @@ def add_schedule(
     db.add(row)
     db.commit()
     db.refresh(row)
+    clear_teacher_calendar_cache()
     _notify_schedule_change(db, action='created', batch=batch, schedule=row, actor=actor)
     return row
 
@@ -194,6 +199,7 @@ def update_schedule(
     row.duration_minutes = duration_minutes
     db.commit()
     db.refresh(row)
+    clear_teacher_calendar_cache()
     batch = db.query(Batch).filter(Batch.id == row.batch_id).first()
     if batch:
         _notify_schedule_change(db, action='updated', batch=batch, schedule=row, actor=actor)
@@ -209,6 +215,7 @@ def delete_schedule(db: Session, schedule_id: int, actor: dict | None = None) ->
         _notify_schedule_change(db, action='deleted', batch=batch, schedule=row, actor=actor)
     db.delete(row)
     db.commit()
+    clear_teacher_calendar_cache()
 
 
 def _notify_membership_change(
@@ -329,6 +336,7 @@ def link_student_to_batch(db: Session, batch_id: int, student_id: int, actor: di
     if not student:
         raise ValueError('Student not found')
     mapping = ensure_active_student_batch_mapping(db, student_id=student_id, batch_id=batch_id)
+    clear_teacher_calendar_cache()
     _notify_membership_change(db, action='linked', batch=batch, student=student, actor=actor)
     return mapping
 
@@ -341,6 +349,7 @@ def unlink_student_from_batch(db: Session, batch_id: int, student_id: int, actor
     student = db.query(Student).filter(Student.id == student_id).first()
     if batch and student:
         _notify_membership_change(db, action='unlinked', batch=batch, student=student, actor=actor)
+    clear_teacher_calendar_cache()
     return mapping
 
 
