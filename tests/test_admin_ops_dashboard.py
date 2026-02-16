@@ -97,7 +97,7 @@ class AdminOpsDashboardTests(unittest.TestCase):
             )
             db.commit()
 
-            payload = get_admin_ops_dashboard(db, now=now)
+            payload = get_admin_ops_dashboard(db, center_id=1, now=now)
             ids = {alert['id'] for alert in payload['system_alerts']}
             self.assertIn('overdue_actions', ids)
             self.assertIn('attendance_missing', ids)
@@ -144,7 +144,7 @@ class AdminOpsDashboardTests(unittest.TestCase):
             )
             db.commit()
 
-            payload = get_admin_ops_dashboard(db, now=now)
+            payload = get_admin_ops_dashboard(db, center_id=1, now=now)
             self.assertEqual(len(payload['teacher_bottlenecks']), 1)
             row = payload['teacher_bottlenecks'][0]
             self.assertEqual(row['open_actions'], 2)
@@ -203,7 +203,7 @@ class AdminOpsDashboardTests(unittest.TestCase):
             )
             db.commit()
 
-            payload = get_admin_ops_dashboard(db, now=now)
+            payload = get_admin_ops_dashboard(db, center_id=1, now=now)
             self.assertEqual(len(payload['batch_health']), 1)
             row = payload['batch_health'][0]
             self.assertEqual(row['batch_id'], batch.id)
@@ -237,7 +237,7 @@ class AdminOpsDashboardTests(unittest.TestCase):
             )
             db.commit()
 
-            payload = get_admin_ops_dashboard(db, now=now)
+            payload = get_admin_ops_dashboard(db, center_id=1, now=now)
             items = {item['key']: item for item in payload['automation_health']['items']}
             self.assertEqual(items['student_daily_digest']['status'], 'ok')
             self.assertEqual(items['inbox_escalation']['status'], 'stale')

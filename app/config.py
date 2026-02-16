@@ -9,7 +9,11 @@ class Settings(BaseSettings):
     app_timezone: str = 'Asia/Kolkata'
     database_url: str = 'sqlite:///./coaching.db'
     telegram_bot_token: str = ''
+    telegram_bot_username: str = ''
     telegram_api_base: str = 'https://api.telegram.org'
+    telegram_webhook_secret: str = ''
+    telegram_link_polling_mode: str = 'auto'  # auto | on | off
+    telegram_link_polling_interval_seconds: int = 20
     enable_telegram_notifications: bool = True
     app_base_url: str = 'http://127.0.0.1:8000'
     frontend_base_url: str = 'http://localhost:5173'
@@ -39,6 +43,11 @@ class Settings(BaseSettings):
     default_cache_ttl: int = 60
     db_slow_query_ms: int = 100
     metrics_slow_ms: int = 200
+    communication_mode: str = 'embedded'
+    communication_service_url: str = 'http://localhost:9000'
+    communication_tenant_id: str = 'default'
+    dev_default_center_slug: str = 'default-center'
+    tenant_base_domain: str = 'yourapp.com'
 
 
 settings = Settings()

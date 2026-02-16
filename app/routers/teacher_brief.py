@@ -1,8 +1,7 @@
-from datetime import date
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from app.core.time_provider import default_time_provider
 from app.db import get_db
 from app.models import Role
 from app.services.auth_service import validate_session_token
@@ -49,5 +48,9 @@ def teacher_brief_today(
     if resolved_teacher_id <= 0:
         raise HTTPException(status_code=400, detail='No teacher id available for summary')
 
-    summary = build_daily_teacher_brief(db, teacher_id=resolved_teacher_id, day=date.today())
+    summary = build_daily_teacher_brief(
+        db,
+        teacher_id=resolved_teacher_id,
+        day=default_time_provider.today(),
+    )
     return summary

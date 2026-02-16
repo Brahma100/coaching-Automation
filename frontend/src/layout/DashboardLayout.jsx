@@ -28,23 +28,48 @@ import { HiOutlineUserGroup } from 'react-icons/hi';
 import useRole from '../hooks/useRole';
 import { logout } from '../services/api';
 import useTheme from '../hooks/useTheme';
+import useTelegramLink from '../hooks/useTelegramLink';
 
 const profileMenu = [
   { to: '/settings', label: 'My Profile', icon: FiUser },
-  { to: '/settings', label: 'Settings', icon: FiSettings }
+  { to: '/settings/communication', label: 'Settings', icon: FiSettings }
 ];
+
+function formatRoleLabel(role) {
+  const value = String(role || '').trim().toLowerCase();
+  if (value === 'admin') return 'Admin';
+  if (value === 'teacher') return 'Teacher';
+  if (value === 'student') return 'Student';
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : 'User';
+}
+
+function maskPhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return 'Not available';
+  if (digits.length <= 4) return `****${digits}`;
+  return `******${digits.slice(-4)}`;
+}
+
+function profileInitials(profile, fallbackRole) {
+  const roleText = formatRoleLabel(profile?.role || fallbackRole || 'user').toUpperCase();
+  return roleText.slice(0, 2);
+}
 
 function DashboardLayout() {
   const navigate = useNavigate();
   const { isDark, toggleTheme } = useTheme();
+  const { status: telegramLink, beginLink, refreshStatus } = useTelegramLink();
   const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false);
   const [userMenuOpen, setUserMenuOpen] = React.useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(() => {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem('dashboard.sidebar.collapsed') === '1';
   });
-  const { isAdmin } = useRole();
+  const { isAdmin, role, profile } = useRole();
   const userMenuRef = React.useRef(null);
+  const roleLabel = formatRoleLabel(profile?.role || role || (isAdmin ? 'admin' : 'teacher'));
+  const subtitle = maskPhone(profile?.phone);
+  const initials = profileInitials(profile, role || (isAdmin ? 'admin' : 'teacher'));
 
   const onLogout = async () => {
     try {
@@ -74,8 +99,10 @@ function DashboardLayout() {
 
   const primaryMenu = React.useMemo(() => {
     const base = [
+      { to: '/brain', label: 'Operational Brain', icon: FiHome },
       { to: '/today', label: 'Today View', icon: FiClock },
       { to: '/calendar', label: 'Teacher Calendar', icon: FiCalendar },
+      { to: '/time-capacity', label: 'Time & Capacity', icon: FiBarChart2 },
       { to: '/dashboard', label: 'Dashboard', icon: FiGrid },
         { to: '/attendance', label: 'Manage Attendance', icon: FiBookOpen },
         { to: '/students', label: 'Manage Students', icon: FiUserCheck },
@@ -241,10 +268,10 @@ function DashboardLayout() {
                     className="flex items-center gap-3 rounded-xl border border-slate-200 px-2 py-1.5 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
                   >
                     <div className="hidden text-right sm:block">
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-100">Teacher</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">K-12 Coach</p>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-100">{roleLabel}</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">{subtitle}</p>
                     </div>
-                    <div className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-[#ffd6a8] to-[#f08d5f] text-xs font-bold text-white sm:h-10 sm:w-10 sm:text-sm">TS</div>
+                    <div className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-[#ffd6a8] to-[#f08d5f] text-xs font-bold text-white sm:h-10 sm:w-10 sm:text-sm">{initials}</div>
                   </button>
 
                   {userMenuOpen ? (
@@ -275,7 +302,7 @@ function DashboardLayout() {
                         type="button"
                         onClick={() => {
                           setUserMenuOpen(false);
-                          navigate('/settings');
+                          navigate('/settings/communication');
                         }}
                         className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
                       >
@@ -321,6 +348,36 @@ function DashboardLayout() {
           </header>
 
           <main className="p-4 sm:p-6">
+            {!telegramLink.loading && !telegramLink.linked ? (
+              <div className="mb-4 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold">
+                      Your number is not linked to Telegram. Link it to receive OTP and all notifications.
+                    </p>
+                    {telegramLink.error ? (
+                      <p className="mt-1 text-xs opacity-90">{telegramLink.error}</p>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={beginLink}
+                    disabled={telegramLink.starting}
+                    className="rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  >
+                    {telegramLink.starting ? 'Opening Telegram...' : 'Link Telegram'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => refreshStatus()}
+                    disabled={telegramLink.checking}
+                    className="rounded-lg border border-amber-500 px-3 py-2 text-sm font-semibold text-amber-800 disabled:opacity-60 dark:border-amber-600 dark:text-amber-200"
+                  >
+                    {telegramLink.checking ? 'Checking...' : "I've linked"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
             <Outlet />
           </main>
         </div>

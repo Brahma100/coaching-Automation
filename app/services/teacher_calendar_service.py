@@ -1,21 +1,28 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
 import json
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session, selectinload
 
 from app.cache import cache, cache_key
+from app.config import settings
+from app.core.time_provider import TimeProvider, default_time_provider
 from app.models import AttendanceRecord, AuthUser, Batch, BatchSchedule, CalendarHoliday, CalendarOverride, ClassSession, FeeRecord, Room, Student, StudentBatchMap, StudentRiskProfile
+from app.services.access_scope_service import get_teacher_batch_ids
+from app.services.center_scope_service import get_current_center_id
 
 
 CALENDAR_TTL_SECONDS = 60
 VALID_VIEWS = {'day', 'week', 'month', 'agenda'}
 NAGER_HOLIDAY_URL = 'https://date.nager.at/api/v3/PublicHolidays/{year}/{country_code}'
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -44,6 +51,17 @@ def _window_for_day(day: date) -> tuple[datetime, datetime]:
     return datetime.combine(day, time.min), datetime.combine(day, time.max)
 
 
+def _as_app_tz(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=APP_ZONE)
+    return dt.astimezone(APP_ZONE)
+
+
+def _require_aware(dt: datetime, *, label: str) -> None:
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        raise ValueError(f'{label} must be timezone-aware')
+
+
 def _calendar_cache_key(
     *,
     role: str,
@@ -56,6 +74,41 @@ def _calendar_cache_key(
     scope = f"{role}:{int(actor_user_id or 0)}"
     identity = f"{scope}:teacher:{teacher_id}:{start_date.isoformat()}:{end_date.isoformat()}:{view}"
     return cache_key('teacher_calendar', identity)
+
+
+def _current_center_id_or_raise(*, query_name: str) -> int:
+    center_id = int(get_current_center_id() or 0)
+    if center_id <= 0:
+        logger.warning('center_filter_missing service=teacher_calendar query=%s', query_name)
+        raise ValueError('center_id is required')
+    return center_id
+
+
+def _resolve_scoped_batch_ids(
+    db: Session,
+    *,
+    role: str,
+    actor_user_id: int | None,
+    teacher_id: int,
+) -> set[int] | None:
+    clean_role = (role or '').strip().lower()
+    actor_center_id = _current_center_id_or_raise(query_name='resolve_scoped_batch_ids')
+    if clean_role == 'admin':
+        if int(teacher_id or 0) <= 0:
+            if int(actor_center_id or 0) <= 0:
+                return None
+            return {
+                int(batch_id)
+                for (batch_id,) in (
+                    db.query(Batch.id)
+                    .filter(Batch.active.is_(True), Batch.center_id == int(actor_center_id))
+                    .all()
+                )
+            }
+        return get_teacher_batch_ids(db, int(teacher_id), center_id=actor_center_id)
+    if clean_role == 'teacher':
+        return get_teacher_batch_ids(db, int(actor_user_id or teacher_id or 0), center_id=actor_center_id)
+    return set()
 
 
 def _apply_overrides(
@@ -148,6 +201,10 @@ def _session_status_label(
     end_dt: datetime,
     session: ClassSession | None,
 ) -> tuple[str, str]:
+    _require_aware(now, label='now')
+    now_app = _as_app_tz(now)
+    start_app = _as_app_tz(start_dt)
+    end_app = _as_app_tz(end_dt)
     if session and session.status == 'cancelled':
         return 'cancelled', 'cancelled'
     if session and session.status == 'missed':
@@ -156,12 +213,12 @@ def _session_status_label(
     if session and session.status in ('submitted', 'closed'):
         return 'completed', 'submitted'
 
-    live = start_dt <= now < end_dt
+    live = start_app <= now_app < end_app
     if live:
         attendance_status = 'open' if session else 'pending'
         return 'live', attendance_status
 
-    if now >= end_dt:
+    if now_app >= end_app:
         if session and session.status in ('open', 'running'):
             return 'completed', 'pending'
         return 'completed', 'pending'
@@ -200,7 +257,9 @@ def get_teacher_calendar_view(
     actor_role: str = 'teacher',
     actor_user_id: int | None = None,
     bypass_cache: bool = False,
+    time_provider: TimeProvider = default_time_provider,
 ) -> list[dict[str, Any]]:
+    center_id = _current_center_id_or_raise(query_name='get_teacher_calendar_view')
     clean_view = (view or '').strip().lower()
     if clean_view not in VALID_VIEWS:
         raise ValueError('view must be one of: day, week, month, agenda')
@@ -222,15 +281,27 @@ def get_teacher_calendar_view(
 
     day_start, _ = _window_for_day(start_date)
     _, day_end = _window_for_day(end_date)
+    scoped_batch_ids = _resolve_scoped_batch_ids(
+        db,
+        role=(actor_role or 'teacher').lower(),
+        actor_user_id=actor_user_id,
+        teacher_id=int(teacher_id),
+    )
+    if isinstance(scoped_batch_ids, set) and not scoped_batch_ids:
+        payload: list[dict[str, Any]] = []
+        cache.set_cached(cache_token, payload, ttl=CALENDAR_TTL_SECONDS)
+        return payload
 
-    schedules = (
+    schedules_query = (
         db.query(BatchSchedule)
         .options(selectinload(BatchSchedule.batch))
         .join(Batch, Batch.id == BatchSchedule.batch_id)
-        .filter(Batch.active.is_(True))
+        .filter(Batch.active.is_(True), Batch.center_id == center_id)
         .order_by(BatchSchedule.weekday.asc(), BatchSchedule.start_time.asc(), BatchSchedule.id.asc())
-        .all()
     )
+    if scoped_batch_ids is not None:
+        schedules_query = schedules_query.filter(BatchSchedule.batch_id.in_(scoped_batch_ids))
+    schedules = schedules_query.all()
 
     if not schedules:
         payload: list[dict[str, Any]] = []
@@ -261,9 +332,10 @@ def get_teacher_calendar_view(
         ClassSession.batch_id.in_(batch_ids),
         ClassSession.scheduled_start >= day_start - timedelta(hours=1),
         ClassSession.scheduled_start <= day_end + timedelta(hours=1),
+        ClassSession.center_id == center_id,
     )
-    if teacher_id:
-        session_query = session_query.filter(ClassSession.teacher_id == teacher_id)
+    if scoped_batch_ids is not None:
+        session_query = session_query.filter(ClassSession.batch_id.in_(scoped_batch_ids))
     sessions = session_query.order_by(ClassSession.scheduled_start.asc(), ClassSession.id.asc()).all()
     sessions_by_batch: dict[int, list[ClassSession]] = {}
     for row in sessions:
@@ -273,9 +345,11 @@ def get_teacher_calendar_view(
         int(batch_id): int(count)
         for batch_id, count in (
             db.query(StudentBatchMap.batch_id, func.count(func.distinct(StudentBatchMap.student_id)))
+            .join(Batch, Batch.id == StudentBatchMap.batch_id)
             .filter(
                 StudentBatchMap.batch_id.in_(batch_ids),
                 StudentBatchMap.active.is_(True),
+                Batch.center_id == center_id,
             )
             .group_by(StudentBatchMap.batch_id)
             .all()
@@ -287,11 +361,13 @@ def get_teacher_calendar_view(
         for batch_id, count in (
             db.query(StudentBatchMap.batch_id, func.count(func.distinct(FeeRecord.student_id)))
             .join(FeeRecord, FeeRecord.student_id == StudentBatchMap.student_id)
+            .join(Batch, Batch.id == StudentBatchMap.batch_id)
             .filter(
                 StudentBatchMap.batch_id.in_(batch_ids),
                 StudentBatchMap.active.is_(True),
                 FeeRecord.is_paid.is_(False),
                 FeeRecord.due_date <= end_date,
+                Batch.center_id == center_id,
             )
             .group_by(StudentBatchMap.batch_id)
             .all()
@@ -303,17 +379,19 @@ def get_teacher_calendar_view(
         for batch_id, count in (
             db.query(StudentBatchMap.batch_id, func.count(func.distinct(StudentRiskProfile.student_id)))
             .join(StudentRiskProfile, StudentRiskProfile.student_id == StudentBatchMap.student_id)
+            .join(Batch, Batch.id == StudentBatchMap.batch_id)
             .filter(
                 StudentBatchMap.batch_id.in_(batch_ids),
                 StudentBatchMap.active.is_(True),
                 StudentRiskProfile.risk_level == 'HIGH',
+                Batch.center_id == center_id,
             )
             .group_by(StudentBatchMap.batch_id)
             .all()
         )
     }
 
-    now = datetime.now()
+    now = time_provider.now()
     payload: list[dict[str, Any]] = []
     for occurrence in occurrences:
         batch = batch_map.get(occurrence.batch_id)
@@ -436,6 +514,7 @@ def sync_calendar_holidays(
     country_code: str = 'IN',
     start_year: int | None = None,
     years: int = 5,
+    time_provider: TimeProvider = default_time_provider,
 ) -> dict[str, Any]:
     clean_country = (country_code or 'IN').upper().strip()
     if len(clean_country) != 2:
@@ -445,7 +524,7 @@ def sync_calendar_holidays(
     if clean_years < 1 or clean_years > 10:
         raise ValueError('years must be between 1 and 10')
 
-    base_year = int(start_year or date.today().year)
+    base_year = int(start_year or time_provider.today().year)
     fetched_years: list[int] = []
     total_rows = 0
 
@@ -541,6 +620,7 @@ def get_teacher_calendar(
     actor_role: str = 'teacher',
     actor_user_id: int | None = None,
     bypass_cache: bool = False,
+    time_provider: TimeProvider = default_time_provider,
 ) -> dict[str, Any]:
     items = get_teacher_calendar_view(
         db,
@@ -551,10 +631,11 @@ def get_teacher_calendar(
         actor_role=actor_role,
         actor_user_id=actor_user_id,
         bypass_cache=bypass_cache,
+        time_provider=time_provider,
     )
     prefs: dict[str, Any] | None = None
     if teacher_id:
-        user = db.query(AuthUser).filter(AuthUser.id == teacher_id).first()
+        user = db.query(AuthUser).filter(AuthUser.id == teacher_id, AuthUser.center_id == _current_center_id_or_raise(query_name='get_teacher_calendar_prefs')).first()
         if user:
             raw = user.calendar_preferences or '{}'
             try:
@@ -601,6 +682,7 @@ def validate_calendar_conflicts(
     duration_minutes: int,
     room_id: int | None = None,
 ) -> dict[str, Any]:
+    center_id = _current_center_id_or_raise(query_name='validate_calendar_conflicts')
     if duration_minutes <= 0 or duration_minutes > 600:
         raise ValueError('duration_minutes must be between 1 and 600')
 
@@ -615,6 +697,7 @@ def validate_calendar_conflicts(
             ClassSession.teacher_id == teacher_id,
             ClassSession.scheduled_start < end_dt,
             ClassSession.scheduled_start >= start_dt - timedelta(hours=6),
+            ClassSession.center_id == center_id,
         )
         .all()
     )
@@ -633,7 +716,7 @@ def validate_calendar_conflicts(
             )
 
     if room_id:
-        room_batches = db.query(Batch.id).filter(Batch.room_id == room_id).all()
+        room_batches = db.query(Batch.id).filter(Batch.room_id == room_id, Batch.center_id == center_id).all()
         room_batch_ids = [bid for (bid,) in room_batches]
         if room_batch_ids:
             room_sessions = (
@@ -642,6 +725,7 @@ def validate_calendar_conflicts(
                     ClassSession.batch_id.in_(room_batch_ids),
                     ClassSession.scheduled_start < end_dt,
                     ClassSession.scheduled_start >= start_dt - timedelta(hours=6),
+                    ClassSession.center_id == center_id,
                 )
                 .all()
             )
@@ -666,17 +750,23 @@ def validate_calendar_conflicts(
     }
 
 
-def get_calendar_session_detail(db: Session, session_id: int) -> dict[str, Any] | None:
+def get_calendar_session_detail(
+    db: Session,
+    session_id: int,
+    *,
+    time_provider: TimeProvider = default_time_provider,
+) -> dict[str, Any] | None:
+    center_id = _current_center_id_or_raise(query_name='get_calendar_session_detail')
     row = (
         db.query(ClassSession)
         .options(selectinload(ClassSession.batch))
-        .filter(ClassSession.id == session_id)
+        .filter(ClassSession.id == session_id, ClassSession.center_id == center_id)
         .first()
     )
     if not row:
         return None
     end_dt = row.scheduled_start + timedelta(minutes=int(row.duration_minutes or 60))
-    now = datetime.now()
+    now = time_provider.now()
     status, attendance_status = _session_status_label(
         now=now,
         start_dt=row.scheduled_start,
@@ -711,7 +801,9 @@ def get_teacher_calendar_analytics(
     actor_role: str = 'teacher',
     actor_user_id: int | None = None,
     bypass_cache: bool = False,
+    time_provider: TimeProvider = default_time_provider,
 ) -> dict[str, Any]:
+    center_id = _current_center_id_or_raise(query_name='get_teacher_calendar_analytics')
     if end_date < start_date:
         raise ValueError('end_date must be greater than or equal to start_date')
 
@@ -728,32 +820,26 @@ def get_teacher_calendar_analytics(
         if cached is not None:
             return cached
 
-    if teacher_id:
-        teacher_batch_ids = {
-            int(batch_id)
-            for (batch_id,) in db.query(ClassSession.batch_id)
-            .filter(ClassSession.teacher_id == teacher_id)
-            .distinct()
-            .all()
-            if batch_id is not None
-        }
-    else:
-        teacher_batch_ids = set()
-
-    # Fallback to active scheduled batches so analytics scope matches calendar scope,
-    # especially for admin/global view (teacher_id=0) and for setups without class_sessions yet.
-    if not teacher_batch_ids:
+    scoped_batch_ids = _resolve_scoped_batch_ids(
+        db,
+        role=(actor_role or 'teacher').lower(),
+        actor_user_id=actor_user_id,
+        teacher_id=int(teacher_id),
+    )
+    if scoped_batch_ids is None:
         teacher_batch_ids = {
             int(batch_id)
             for (batch_id,) in (
                 db.query(BatchSchedule.batch_id)
                 .join(Batch, Batch.id == BatchSchedule.batch_id)
-                .filter(Batch.active.is_(True))
+                .filter(Batch.active.is_(True), Batch.center_id == center_id)
                 .distinct()
                 .all()
             )
             if batch_id is not None
         }
+    else:
+        teacher_batch_ids = set(scoped_batch_ids)
 
     if not teacher_batch_ids:
         payload = {'range': {'start': start_date.isoformat(), 'end': end_date.isoformat()}, 'days': []}
@@ -762,9 +848,11 @@ def get_teacher_calendar_analytics(
 
     total_students = int(
         db.query(func.count(func.distinct(StudentBatchMap.student_id)))
+        .join(Batch, Batch.id == StudentBatchMap.batch_id)
         .filter(
             StudentBatchMap.batch_id.in_(teacher_batch_ids),
             StudentBatchMap.active.is_(True),
+            Batch.center_id == center_id,
         )
         .scalar()
         or 0
@@ -783,6 +871,7 @@ def get_teacher_calendar_analytics(
             AttendanceRecord.attendance_date >= start_date,
             AttendanceRecord.attendance_date <= end_date,
             Student.batch_id.in_(teacher_batch_ids),
+            Student.center_id == center_id,
         )
         .group_by(AttendanceRecord.attendance_date)
         .all()
@@ -807,3 +896,4 @@ def get_teacher_calendar_analytics(
     payload = {'range': {'start': start_date.isoformat(), 'end': end_date.isoformat()}, 'days': days}
     cache.set_cached(cache_token, payload, ttl=CALENDAR_TTL_SECONDS)
     return payload
+APP_ZONE = ZoneInfo(settings.app_timezone or 'Asia/Kolkata')

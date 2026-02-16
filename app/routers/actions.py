@@ -1,19 +1,25 @@
+import logging
+
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
-from app.cache import cache, cache_key
+from app.cache import cache
 from app.db import get_db
-from app.models import Parent, ParentStudentMap, PendingAction, Student
+from app.models import Batch, ClassSession, Parent, ParentStudentMap, PendingAction, Student
 from app.schemas import ActionTokenCreateRequest, ActionTokenExecuteRequest
-from app.services.action_token_service import create_action_token, verify_and_consume_token
+from app.services.action_token_service import consume_token, create_action_token, verify_token
+from app.services.access_scope_service import get_teacher_batch_ids
 from app.services.auth_service import validate_session_token
 from app.services.comms_service import queue_telegram_by_chat_id, send_fee_reminder
 from app.services.fee_service import build_upi_link
+from app.services.integration_service import require_integration
+from app.services.operational_brain_service import clear_operational_brain_cache
 from app.services.pending_action_service import create_pending_action, list_open_actions, resolve_action
 
 
 router = APIRouter(prefix='/actions', tags=['Actions'])
+logger = logging.getLogger(__name__)
 
 
 class ActionResolvePayload(BaseModel):
@@ -30,6 +36,97 @@ def _require_teacher(request: Request):
     if not session or session['role'] not in ('teacher', 'admin'):
         raise HTTPException(status_code=401, detail='Unauthorized')
     return session
+
+
+def _resolve_session_optional(request: Request) -> dict | None:
+    token = request.cookies.get('auth_session')
+    if not token:
+        authz = request.headers.get('authorization', '')
+        if authz.lower().startswith('bearer '):
+            token = authz[7:].strip()
+    if not token:
+        return None
+    return validate_session_token(token)
+
+
+def _require_teacher_or_admin_session(request: Request) -> dict:
+    session = _resolve_session_optional(request)
+    role = ((session or {}).get('role') or '').strip().lower()
+    if not session:
+        raise HTTPException(status_code=401, detail='Unauthorized')
+    if role not in ('teacher', 'admin'):
+        raise HTTPException(status_code=403, detail='Forbidden')
+    return session
+
+
+def _require_int(value, name: str) -> int:
+    try:
+        parsed = int(value)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f'Invalid {name}') from exc
+    if parsed <= 0:
+        raise HTTPException(status_code=400, detail=f'Invalid {name}')
+    return parsed
+
+
+def _validate_token_create_scope(db: Session, *, actor: dict, payload: dict) -> tuple[int, str]:
+    role = str(actor.get('role') or '').strip().lower()
+    actor_user_id = _require_int(actor.get('user_id'), 'actor user')
+    actor_center_id = _require_int(actor.get('center_id'), 'actor center')
+
+    token_center_id_raw = payload.get('center_id')
+    token_center_id = _require_int(token_center_id_raw, 'payload.center_id')
+    if token_center_id != actor_center_id:
+        raise HTTPException(status_code=403, detail='Unauthorized center scope')
+
+    expected_role = str(payload.get('expected_role') or payload.get('role') or '').strip().lower()
+    if expected_role not in ('teacher', 'admin', 'student'):
+        raise HTTPException(status_code=400, detail='payload.expected_role is required')
+
+    teacher_batch_ids: set[int] = set()
+    if role == 'teacher':
+        teacher_batch_ids = get_teacher_batch_ids(db, actor_user_id, center_id=actor_center_id)
+
+    session_id_raw = payload.get('session_id')
+    if session_id_raw is not None:
+        session_id = _require_int(session_id_raw, 'payload.session_id')
+        session_row = db.query(ClassSession).filter(ClassSession.id == session_id).first()
+        if not session_row:
+            raise HTTPException(status_code=404, detail='Class session not found')
+        if int(session_row.center_id or 0) != actor_center_id:
+            raise HTTPException(status_code=403, detail='Unauthorized center scope')
+        if role == 'teacher':
+            if int(session_row.teacher_id or 0) != actor_user_id and int(session_row.batch_id or 0) not in teacher_batch_ids:
+                raise HTTPException(status_code=403, detail='Unauthorized session scope')
+
+    batch_id_raw = payload.get('batch_id')
+    if batch_id_raw is not None:
+        batch_id = _require_int(batch_id_raw, 'payload.batch_id')
+        batch_row = db.query(Batch).filter(Batch.id == batch_id).first()
+        if not batch_row:
+            raise HTTPException(status_code=404, detail='Batch not found')
+        if int(batch_row.center_id or 0) != actor_center_id:
+            raise HTTPException(status_code=403, detail='Unauthorized center scope')
+        if role == 'teacher' and int(batch_row.id) not in teacher_batch_ids:
+            raise HTTPException(status_code=403, detail='Unauthorized batch scope')
+
+    student_id_raw = payload.get('student_id')
+    if student_id_raw is not None:
+        student_id = _require_int(student_id_raw, 'payload.student_id')
+        student_row = db.query(Student).filter(Student.id == student_id).first()
+        if not student_row:
+            raise HTTPException(status_code=404, detail='Student not found')
+        if int(student_row.center_id or 0) != actor_center_id:
+            raise HTTPException(status_code=403, detail='Unauthorized center scope')
+        if role == 'teacher' and int(student_row.batch_id or 0) not in teacher_batch_ids:
+            raise HTTPException(status_code=403, detail='Unauthorized student scope')
+
+    if role == 'teacher':
+        payload_teacher_id = payload.get('teacher_id')
+        if payload_teacher_id is not None and _require_int(payload_teacher_id, 'payload.teacher_id') != actor_user_id:
+            raise HTTPException(status_code=403, detail='Unauthorized teacher scope')
+
+    return actor_center_id, expected_role
 
 
 @router.get('/list-open')
@@ -136,6 +233,15 @@ def notify_parent_for_risk_action(
     if not parent or not parent.telegram_chat_id:
         raise HTTPException(status_code=404, detail='Parent not found or missing telegram chat id')
 
+    integration_gate = require_integration(db, 'telegram', center_id=student.center_id)
+    if integration_gate.get('integration_required'):
+        return {
+            'ok': False,
+            'integration_required': True,
+            'provider': 'telegram',
+            'message': integration_gate.get('message') or 'Connect Telegram to enable notifications',
+        }
+
     message = f'Follow-up needed for {student.name}. Teacher flagged risk indicators for review.'
     queue_telegram_by_chat_id(db, parent.telegram_chat_id, message, student_id=student.id)
     _invalidate_action_caches(request, teacher_id=row.teacher_id)
@@ -143,14 +249,36 @@ def notify_parent_for_risk_action(
 
 
 @router.post('/token/create')
-def create_token(payload: ActionTokenCreateRequest, db: Session = Depends(get_db)):
-    return create_action_token(db, action_type=payload.action_type, payload=payload.payload, ttl_minutes=payload.ttl_minutes)
+def create_token(
+    payload: ActionTokenCreateRequest,
+    actor: dict = Depends(_require_teacher_or_admin_session),
+    db: Session = Depends(get_db),
+):
+    token_payload = dict(payload.payload or {})
+    center_id, expected_role = _validate_token_create_scope(db, actor=actor, payload=token_payload)
+    return create_action_token(
+        db,
+        action_type=payload.action_type,
+        payload=token_payload,
+        ttl_minutes=payload.ttl_minutes,
+        expected_role=expected_role,
+        center_id=center_id,
+    )
 
 
 @router.post('/notify-parent')
-def notify_parent(payload: ActionTokenExecuteRequest, db: Session = Depends(get_db)):
+def notify_parent(payload: ActionTokenExecuteRequest, request: Request, db: Session = Depends(get_db)):
+    session = _resolve_session_optional(request)
     try:
-        token_payload = verify_and_consume_token(db, payload.token, expected_action_type='notify-parent')
+        token_payload = verify_token(
+            db,
+            payload.token,
+            expected_action_type='notify-parent',
+            request_role=(session or {}).get('role'),
+            request_center_id=(session or {}).get('center_id'),
+            request_ip=(request.client.host if request.client else ''),
+            request_user_agent=request.headers.get('user-agent', ''),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -161,13 +289,23 @@ def notify_parent(payload: ActionTokenExecuteRequest, db: Session = Depends(get_
         raise HTTPException(status_code=404, detail='Parent not found or missing telegram chat id')
 
     queue_telegram_by_chat_id(db, parent.telegram_chat_id, payload.message or 'Reminder from coaching', student_id=student_id)
+    consume_token(db, payload.token)
     return {'ok': True, 'action': 'notify-parent'}
 
 
 @router.post('/send-fee-reminder')
-def send_fee(payload: ActionTokenExecuteRequest, db: Session = Depends(get_db)):
+def send_fee(payload: ActionTokenExecuteRequest, request: Request, db: Session = Depends(get_db)):
+    session = _resolve_session_optional(request)
     try:
-        token_payload = verify_and_consume_token(db, payload.token, expected_action_type='send-fee-reminder')
+        token_payload = verify_token(
+            db,
+            payload.token,
+            expected_action_type='send-fee-reminder',
+            request_role=(session or {}).get('role'),
+            request_center_id=(session or {}).get('center_id'),
+            request_ip=(request.client.host if request.client else ''),
+            request_user_agent=request.headers.get('user-agent', ''),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -190,43 +328,95 @@ def send_fee(payload: ActionTokenExecuteRequest, db: Session = Depends(get_db)):
         upi_link = build_upi_link(student, amount_due)
 
     send_fee_reminder(db, student, amount_due, upi_link)
+    consume_token(db, payload.token)
     return {'ok': True, 'action': 'send-fee-reminder', 'student_id': student.id}
 
 
 @router.get('/notify-parent')
 def notify_parent_get(token: str = Query(...), parent_id: int | None = None, student_id: int | None = None, db: Session = Depends(get_db)):
-    payload = ActionTokenExecuteRequest(token=token, parent_id=parent_id, student_id=student_id, message='Please check attendance and updates.')
-    return notify_parent(payload, db)
+    logger.warning('read_endpoint_side_effect_removed endpoint=/actions/notify-parent')
+    return {
+        'ok': False,
+        'deprecated_get': True,
+        'message': 'GET command endpoint is deprecated; use POST /actions/notify-parent',
+        'next': {
+            'method': 'POST',
+            'path': '/actions/notify-parent',
+            'body': {
+                'token': token,
+                'parent_id': parent_id,
+                'student_id': student_id,
+                'message': 'Please check attendance and updates.',
+            },
+        },
+    }
 
 
 @router.get('/send-fee-reminder')
 def send_fee_get(token: str = Query(...), student_id: int | None = None, fee_record_id: int | None = None, db: Session = Depends(get_db)):
-    payload = ActionTokenExecuteRequest(token=token, student_id=student_id, fee_record_id=fee_record_id)
-    return send_fee(payload, db)
+    logger.warning('read_endpoint_side_effect_removed endpoint=/actions/send-fee-reminder')
+    return {
+        'ok': False,
+        'deprecated_get': True,
+        'message': 'GET command endpoint is deprecated; use POST /actions/send-fee-reminder',
+        'next': {
+            'method': 'POST',
+            'path': '/actions/send-fee-reminder',
+            'body': {'token': token, 'student_id': student_id, 'fee_record_id': fee_record_id},
+        },
+    }
 
 
 @router.post('/escalate-student')
-def escalate_student(payload: ActionTokenExecuteRequest, db: Session = Depends(get_db)):
+def escalate_student(payload: ActionTokenExecuteRequest, request: Request, db: Session = Depends(get_db)):
+    session = _resolve_session_optional(request)
     try:
-        token_payload = verify_and_consume_token(db, payload.token, expected_action_type='escalate-student')
+        token_payload = verify_token(
+            db,
+            payload.token,
+            expected_action_type='escalate-student',
+            request_role=(session or {}).get('role'),
+            request_center_id=(session or {}).get('center_id'),
+            request_ip=(request.client.host if request.client else ''),
+            request_user_agent=request.headers.get('user-agent', ''),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     student_id = payload.student_id or token_payload.get('student_id')
     row = create_pending_action(db, action_type='manual', student_id=student_id, related_session_id=None, note='Escalated by teacher action')
+    consume_token(db, payload.token)
     return {'ok': True, 'action': 'escalate-student', 'pending_action_id': row.id}
 
 
 @router.get('/escalate-student')
 def escalate_student_get(token: str = Query(...), student_id: int | None = None, db: Session = Depends(get_db)):
-    payload = ActionTokenExecuteRequest(token=token, student_id=student_id)
-    return escalate_student(payload, db)
+    logger.warning('read_endpoint_side_effect_removed endpoint=/actions/escalate-student')
+    return {
+        'ok': False,
+        'deprecated_get': True,
+        'message': 'GET command endpoint is deprecated; use POST /actions/escalate-student',
+        'next': {
+            'method': 'POST',
+            'path': '/actions/escalate-student',
+            'body': {'token': token, 'student_id': student_id},
+        },
+    }
 
 
 @router.post('/mark-resolved')
-def mark_resolved(payload: ActionTokenExecuteRequest, db: Session = Depends(get_db)):
+def mark_resolved(payload: ActionTokenExecuteRequest, request: Request, db: Session = Depends(get_db)):
+    session = _resolve_session_optional(request)
     try:
-        token_payload = verify_and_consume_token(db, payload.token, expected_action_type='mark-resolved')
+        token_payload = verify_token(
+            db,
+            payload.token,
+            expected_action_type='mark-resolved',
+            request_role=(session or {}).get('role'),
+            request_center_id=(session or {}).get('center_id'),
+            request_ip=(request.client.host if request.client else ''),
+            request_user_agent=request.headers.get('user-agent', ''),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -236,7 +426,9 @@ def mark_resolved(payload: ActionTokenExecuteRequest, db: Session = Depends(get_
     row = resolve_action(db, action_id)
     cache.invalidate_prefix('today_view')
     cache.invalidate_prefix('inbox')
-    cache.invalidate('admin_ops')
+    cache.invalidate_prefix('admin_ops')
+    clear_operational_brain_cache()
+    consume_token(db, payload.token)
     return {'ok': True, 'action': 'mark-resolved', 'pending_action_id': row.id}
 
 
@@ -246,14 +438,21 @@ def _invalidate_action_caches(request: Request, *, teacher_id: int | None = None
     except Exception:
         session = None
     cache.invalidate_prefix('today_view')
-    if teacher_id:
-        cache.invalidate(cache_key('inbox', int(teacher_id)))
-    else:
-        cache.invalidate_prefix('inbox')
-    cache.invalidate('admin_ops')
+    cache.invalidate_prefix('inbox')
+    cache.invalidate_prefix('admin_ops')
+    clear_operational_brain_cache()
 
 
 @router.get('/mark-resolved')
 def mark_resolved_get(token: str = Query(...), db: Session = Depends(get_db)):
-    payload = ActionTokenExecuteRequest(token=token)
-    return mark_resolved(payload, db)
+    logger.warning('read_endpoint_side_effect_removed endpoint=/actions/mark-resolved')
+    return {
+        'ok': False,
+        'deprecated_get': True,
+        'message': 'GET command endpoint is deprecated; use POST /actions/mark-resolved',
+        'next': {
+            'method': 'POST',
+            'path': '/actions/mark-resolved',
+            'body': {'token': token},
+        },
+    }

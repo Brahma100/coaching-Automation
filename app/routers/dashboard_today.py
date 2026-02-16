@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.cache import cache_key, cached_view
+from app.core.time_provider import default_time_provider
 from app.db import get_db
 from app.models import Role
 from app.services import snapshot_service
@@ -14,6 +15,7 @@ from app.services.dashboard_today_service import get_today_view
 
 
 router = APIRouter(prefix='/api/dashboard', tags=['Dashboard'])
+logger = logging.getLogger(__name__)
 
 
 def _require_user(request: Request) -> dict:
@@ -39,7 +41,7 @@ def today_view(
     role = (session.get('role') or '').lower()
     if teacher_id is not None and role != Role.ADMIN.value:
         raise HTTPException(status_code=403, detail='Unauthorized')
-    today = datetime.utcnow().date()
+    today = default_time_provider.today()
     effective_teacher_id = int(teacher_id or 0) if role == Role.ADMIN.value else int(session.get('user_id') or 0)
     if role == Role.ADMIN.value and teacher_id is None:
         effective_teacher_id = 0
@@ -50,10 +52,7 @@ def today_view(
             return snapshot
     try:
         payload = get_today_view(db, actor=session, teacher_filter_id=teacher_id)
-        try:
-            snapshot_service.upsert_teacher_today_snapshot(db, teacher_id=effective_teacher_id, day=today, payload=payload)
-        except Exception:
-            pass
+        logger.warning('read_endpoint_side_effect_removed endpoint=/api/dashboard/today side_effect=teacher_today_snapshot_upsert')
         return payload
     except Exception:
         return {
@@ -66,10 +65,11 @@ def today_view(
 
 
 def _today_key(session: dict | None, teacher_id: int | None) -> str:
-    today = datetime.utcnow().date().isoformat()
+    today = default_time_provider.today().isoformat()
     role = (session.get('role') or '').lower() if session else 'unknown'
+    actor_user_id = int(session.get('user_id') or 0) if session else 0
     if role == Role.ADMIN.value:
         scope = teacher_id or 'all'
     else:
         scope = session.get('user_id') if session else 'unknown'
-    return cache_key('today_view', f"{role}:{scope}:{today}")
+    return cache_key('today_view', f"{role}:{actor_user_id}:{scope}:{today}")

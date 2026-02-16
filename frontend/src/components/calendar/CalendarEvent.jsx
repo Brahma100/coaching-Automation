@@ -10,7 +10,6 @@ function CalendarEvent({ event, compact, hideMiddleInfo = false, onClick }) {
       type="button"
       onClick={() => onClick(event)}
       className={`calendar-event-card ${event.color_class || ''} ${compact ? 'compact' : ''} ${event.status === 'live' ? 'live' : ''}`}
-      whileHover={shouldReduceMotion ? undefined : { scale: 1.01 }}
       transition={{ duration: 0.15 }}
     >
       <div className="calendar-event-head">

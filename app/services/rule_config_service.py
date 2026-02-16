@@ -8,6 +8,7 @@ DEFAULT_RULES = {
     'absence_streak_threshold': 3,
     'notify_parent_on_absence': True,
     'notify_parent_on_fee_due': True,
+    'enable_student_lifecycle_notifications': True,
     'reminder_grace_period_days': 0,
     'quiet_hours_start': settings.default_quiet_hours_start,
     'quiet_hours_end': settings.default_quiet_hours_end,
@@ -28,6 +29,7 @@ def get_effective_rule_config(db: Session, batch_id: int | None = None) -> dict:
                 'absence_streak_threshold': global_row.absence_streak_threshold,
                 'notify_parent_on_absence': global_row.notify_parent_on_absence,
                 'notify_parent_on_fee_due': global_row.notify_parent_on_fee_due,
+                'enable_student_lifecycle_notifications': global_row.enable_student_lifecycle_notifications,
                 'reminder_grace_period_days': global_row.reminder_grace_period_days,
                 'quiet_hours_start': global_row.quiet_hours_start,
                 'quiet_hours_end': global_row.quiet_hours_end,
@@ -39,6 +41,7 @@ def get_effective_rule_config(db: Session, batch_id: int | None = None) -> dict:
                 'absence_streak_threshold': batch_row.absence_streak_threshold,
                 'notify_parent_on_absence': batch_row.notify_parent_on_absence,
                 'notify_parent_on_fee_due': batch_row.notify_parent_on_fee_due,
+                'enable_student_lifecycle_notifications': batch_row.enable_student_lifecycle_notifications,
                 'reminder_grace_period_days': batch_row.reminder_grace_period_days,
                 'quiet_hours_start': batch_row.quiet_hours_start,
                 'quiet_hours_end': batch_row.quiet_hours_end,
@@ -57,6 +60,7 @@ def upsert_rule_config(
     absence_streak_threshold: int,
     notify_parent_on_absence: bool,
     notify_parent_on_fee_due: bool,
+    enable_student_lifecycle_notifications: bool,
     reminder_grace_period_days: int,
     quiet_hours_start: str,
     quiet_hours_end: str,
@@ -69,6 +73,7 @@ def upsert_rule_config(
     row.absence_streak_threshold = absence_streak_threshold
     row.notify_parent_on_absence = notify_parent_on_absence
     row.notify_parent_on_fee_due = notify_parent_on_fee_due
+    row.enable_student_lifecycle_notifications = enable_student_lifecycle_notifications
     row.reminder_grace_period_days = reminder_grace_period_days
     row.quiet_hours_start = quiet_hours_start
     row.quiet_hours_end = quiet_hours_end

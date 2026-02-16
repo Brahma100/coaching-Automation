@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 
 from sqlalchemy import and_
 
+from app.core.time_provider import TimeProvider, default_time_provider
+from app.core.phone import normalize_phone as _core_normalize_phone
 from app.models import (
     AttendanceRecord,
     ClassSession,
@@ -20,7 +22,8 @@ from app.services.auth_service import validate_session_token
 
 
 def normalize_phone(value: str) -> str:
-    return ''.join(ch for ch in (value or '') if ch.isdigit())
+    # DEPRECATED: use app.core.phone.normalize_phone directly.
+    return _core_normalize_phone(value)
 
 
 def require_student_session(db, token: str | None) -> dict:
@@ -39,13 +42,14 @@ def require_student_session(db, token: str | None) -> dict:
 def resolve_student_for_session(db, session: dict) -> Student:
     # Read-only by design: derive identity from session phone only (never from request params).
     phone = normalize_phone(session.get('phone') or '')
+    center_id = int(session.get('center_id') or 0)
     if not phone:
         raise PermissionError('Student profile not linked to this session')
 
-    direct_ids = {
-        row.id
-        for row in db.query(Student).filter(Student.guardian_phone == phone).all()
-    }
+    direct_query = db.query(Student).filter(Student.guardian_phone == phone)
+    if center_id > 0:
+        direct_query = direct_query.filter(Student.center_id == center_id)
+    direct_ids = {row.id for row in direct_query.all()}
 
     parent_ids = {
         row.id
@@ -64,13 +68,21 @@ def resolve_student_for_session(db, session: dict) -> Student:
     if len(student_ids) > 1:
         raise PermissionError('Multiple student profiles linked to this phone')
 
-    student = db.query(Student).filter(Student.id == list(student_ids)[0]).first()
+    student_query = db.query(Student).filter(Student.id == list(student_ids)[0])
+    if center_id > 0:
+        student_query = student_query.filter(Student.center_id == center_id)
+    student = student_query.first()
     if not student:
         raise PermissionError('Student profile not found')
     return student
 
 
-def get_student_dashboard(db, student: Student) -> dict:
+def get_student_dashboard(
+    db,
+    student: Student,
+    *,
+    time_provider: TimeProvider = default_time_provider,
+) -> dict:
     # Read-only by design: aggregates only this student's data.
     attendance_rows = db.query(AttendanceRecord).filter(AttendanceRecord.student_id == student.id).all()
     total_attendance = len(attendance_rows)
@@ -88,7 +100,7 @@ def get_student_dashboard(db, student: Student) -> dict:
     )
     pending_homework = max(0, homework_total - submitted_homework)
 
-    today = date.today()
+    today = time_provider.today()
     fee_rows = db.query(FeeRecord).filter(FeeRecord.student_id == student.id).all()
     paid_fees = sum(1 for row in fee_rows if row.is_paid or row.paid_amount >= row.amount)
     due_fees = sum(1 for row in fee_rows if not row.is_paid and row.due_date >= today)
@@ -112,7 +124,12 @@ def get_student_dashboard(db, student: Student) -> dict:
     if batch_ids:
         rows = (
             db.query(ClassSession)
-            .filter(and_(ClassSession.batch_id.in_(batch_ids), ClassSession.scheduled_start >= datetime.utcnow()))
+            .filter(
+                and_(
+                    ClassSession.batch_id.in_(batch_ids),
+                    ClassSession.scheduled_start >= time_provider.now().replace(tzinfo=None),
+                )
+            )
             .order_by(ClassSession.scheduled_start.asc())
             .limit(5)
             .all()
@@ -188,7 +205,7 @@ def list_student_homework(db, student: Student, limit: int = 100) -> list[dict]:
 
 def list_student_fees(db, student: Student) -> list[dict]:
     # Read-only by design: fee rows scoped to the resolved student.
-    today = date.today()
+    today = default_time_provider.today()
     rows = (
         db.query(FeeRecord)
         .filter(FeeRecord.student_id == student.id)

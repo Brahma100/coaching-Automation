@@ -4,7 +4,7 @@ import asyncio
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from app.config import settings
@@ -50,7 +50,7 @@ class _MinuteCounter:
     def _flush_locked(self, minute_epoch: int) -> None:
         if not self._counts:
             return
-        minute_start = datetime.fromtimestamp(minute_epoch, tz=timezone.utc)
+        minute_start = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=minute_epoch)
         try:
             _exporter.export_cache_minute(minute_start=minute_start, counts=dict(self._counts))
         except Exception:

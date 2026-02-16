@@ -1,11 +1,19 @@
 import React from 'react';
 import { FaBookReader, FaRegStar, FaUserCheck, FaUserGraduate, FaUserTimes } from 'react-icons/fa';
 import { GiAchievement } from 'react-icons/gi';
+import { FiArrowRight, FiZap } from 'react-icons/fi';
 import { MdWarningAmber } from 'react-icons/md';
+import { useDispatch, useSelector } from 'react-redux';
+import { Link } from 'react-router-dom';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 
 import { PageSkeleton } from '../components/Skeleton.jsx';
-import { fetchDashboardBundle } from '../services/api';
+import {
+  loadRequested as dashboardLoadRequested,
+  setSelectedBatchId,
+  setSelectedMonth,
+} from '../store/slices/dashboardSlice.js';
+import { loadRequested as brainLoadRequested } from '../store/slices/brainSlice.js';
 
 const skillColors = ['#10b981', '#f97316', '#06b6d4', '#f43f5e'];
 const perfColors = ['#10b981', '#f97316', '#ec4899', '#0ea5e9'];
@@ -37,33 +45,20 @@ function formatMonthKey(monthKey) {
 }
 
 function Dashboard() {
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState('');
-  const [data, setData] = React.useState(null);
-  const [selectedBatchId, setSelectedBatchId] = React.useState('all');
-  const [selectedMonth, setSelectedMonth] = React.useState('all');
+  const dispatch = useDispatch();
+  const {
+    loading,
+    error,
+    data,
+    selectedBatchId,
+    selectedMonth,
+  } = useSelector((state) => state.dashboard || {});
+  const { data: brainData, loading: brainLoading } = useSelector((state) => state.brain || {});
 
   React.useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const payload = await fetchDashboardBundle();
-        if (mounted) {
-          setData(payload);
-          setError('');
-        }
-      } catch (err) {
-        if (mounted) {
-          setError(err?.response?.data?.detail || err?.message || 'Failed to load dashboard');
-        }
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+    dispatch(dashboardLoadRequested());
+    dispatch(brainLoadRequested());
+  }, [dispatch]);
 
   if (loading) {
     return <PageSkeleton />;
@@ -163,6 +158,12 @@ function Dashboard() {
   const activePeriodLabel = selectedMonth === 'all'
     ? 'All Months'
     : formatMonthKey(selectedMonth);
+  const brainNextClass = brainData?.next_upcoming_class || null;
+  const brainPendingCount = Array.isArray(brainData?.pending_inbox_actions) ? brainData.pending_inbox_actions.length : 0;
+  const brainRiskCount = (() => {
+    const risk = brainData?.risk_students || {};
+    return (risk.high_risk?.length || 0) + (risk.fee_overdue?.length || 0) + (risk.repeat_absentees?.length || 0);
+  })();
 
   return (
     <div className="space-y-5">
@@ -170,7 +171,7 @@ function Dashboard() {
         <h2 className="text-3xl font-extrabold text-slate-900 sm:text-[34px]">Dashboard</h2>
         <select
           value={selectedBatchId}
-          onChange={(e) => setSelectedBatchId(e.target.value)}
+          onChange={(e) => dispatch(setSelectedBatchId(e.target.value))}
           className="w-full rounded-lg bg-white px-4 py-2 text-sm font-semibold text-[#2f7bf6] shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:text-[#66a3ff] sm:w-auto"
         >
           <option value="all">All Classes</option>
@@ -186,7 +187,7 @@ function Dashboard() {
             <h3 className="text-2xl font-bold text-slate-900 sm:text-[26px]">Class Statistics</h3>
             <select
               value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
+              onChange={(e) => dispatch(setSelectedMonth(e.target.value))}
               className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 dark:bg-slate-900 dark:text-slate-300 sm:w-auto"
             >
               <option value="all">All Months</option>
@@ -292,6 +293,26 @@ function Dashboard() {
           </div>
         </section>
       </div>
+
+      <section className="rounded-2xl border border-sky-100 bg-gradient-to-r from-sky-50 to-indigo-50 p-4 shadow-sm dark:border-slate-700 dark:from-slate-900 dark:to-slate-900">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-300">
+              <FiZap className="h-3.5 w-3.5" />
+              Operational Brain Preview
+            </p>
+            <h3 className="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">
+              {brainLoading ? 'Loading live intelligence...' : (brainNextClass ? `${brainNextClass.batch_name} is coming up` : 'No class in next 2 hours')}
+            </h3>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              Pending actions: {brainPendingCount} | Risk signals: {brainRiskCount}
+            </p>
+          </div>
+          <Link to="/brain" className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white">
+            Open /brain <FiArrowRight />
+          </Link>
+        </div>
+      </section>
 
       <div className="grid gap-5 xl:grid-cols-[1.15fr,.85fr]">
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

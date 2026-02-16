@@ -1,10 +1,11 @@
-from datetime import datetime
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.cache import cache, cache_key, cached_view
+from app.core.time_provider import default_time_provider
 from app.db import get_db
 from app.models import Student
 from app.services import snapshot_service
@@ -18,6 +19,7 @@ from app.services.student_portal_service import (
 
 
 router = APIRouter(prefix='/api/student', tags=['Student API'])
+logger = logging.getLogger(__name__)
 
 
 class StudentPreferencesUpdate(BaseModel):
@@ -91,7 +93,7 @@ def update_student_preferences(
     row.enable_motivation_messages = payload.enable_motivation_messages
     db.commit()
     db.refresh(row)
-    cache.invalidate(cache_key('student_dashboard', row.id))
+    cache.invalidate(_student_dashboard_key(auth))
     return {
         'enable_daily_digest': row.enable_daily_digest,
         'enable_homework_reminders': row.enable_homework_reminders,
@@ -107,23 +109,23 @@ def student_dashboard_api(
     db: Session = Depends(get_db),
 ):
     student = auth['student']
-    today = datetime.utcnow().date()
+    today = default_time_provider.today()
     if not bypass_cache:
         snapshot = snapshot_service.get_student_dashboard_snapshot(db, student_id=student.id, day=today)
         if snapshot is not None:
             return snapshot
     payload = get_student_dashboard(db, student)
-    try:
-        snapshot_service.upsert_student_dashboard_snapshot(db, student_id=student.id, day=today, payload=payload)
-    except Exception:
-        pass
+    logger.warning('read_endpoint_side_effect_removed endpoint=/api/student/dashboard side_effect=student_dashboard_snapshot_upsert')
     return payload
 
 
 def _student_dashboard_key(auth: dict | None) -> str:
     student = auth.get('student') if auth else None
     student_id = student.id if student else 0
-    return cache_key('student_dashboard', student_id)
+    session = auth.get('session') if auth else {}
+    role = str((session or {}).get('role') or 'student').lower()
+    user_id = int((session or {}).get('user_id') or 0)
+    return cache_key('student_dashboard', f'{role}:{user_id}:{student_id}')
 
 
 @router.get('/attendance')

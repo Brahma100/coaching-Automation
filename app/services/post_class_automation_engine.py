@@ -6,16 +6,19 @@ from datetime import datetime, timedelta
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
+from app.communication.communication_event import CommunicationEvent, CommunicationEventType
+from app.config import settings
 from app.frontend_routes import session_summary_url
 from app.models import AllowedUser, AllowedUserStatus, AttendanceRecord, AuthUser, Batch, ClassSession, FeeRecord, Student
 from app.services.action_token_service import create_action_token
 from app.services.batch_membership_service import list_active_student_ids_for_batch
-from app.services.comms_service import queue_teacher_telegram, queue_telegram_by_chat_id
+from app.services.comms_service import emit_communication_event
 from app.services.daily_teacher_brief_service import resolve_teacher_chat_id
 from app.services.rule_config_service import get_effective_rule_config
 from app.services.student_automation_engine import send_student_attendance_feedback
 from app.services.inbox_automation import create_absentee_actions, create_fee_actions, create_review_actions
 from app.metrics import timed_service
+from app.core.time_provider import TimeProvider, default_time_provider
 
 
 logger = logging.getLogger(__name__)
@@ -139,7 +142,13 @@ def _rule_risk_indicators(db: Session, student_ids: list[int]) -> list[dict]:
 
 
 @timed_service('post_class_automation')
-def run_post_class_automation(db: Session, session_id: int, trigger_source: str) -> dict:
+def run_post_class_automation(
+    db: Session,
+    session_id: int,
+    trigger_source: str,
+    *,
+    time_provider: TimeProvider = default_time_provider,
+) -> dict:
     session = db.query(ClassSession).filter(ClassSession.id == session_id).first()
     if not session:
         logger.info('post_class_automation_missing_session', extra={'session_id': session_id})
@@ -200,7 +209,7 @@ def run_post_class_automation(db: Session, session_id: int, trigger_source: str)
                 'teacher_id': session.teacher_id,
                 'role': 'teacher',
             },
-            ttl_minutes=int(max(1, ((end_time + timedelta(hours=24)) - datetime.utcnow()).total_seconds() // 60)),
+            ttl_minutes=int(max(1, ((end_time + timedelta(hours=24)) - time_provider.now().replace(tzinfo=None)).total_seconds() // 60)),
         )['token']
         link = session_summary_url(session.id, token)
         absentees_count = len(absences['absent_students']) + len(absences['late_students'])
@@ -213,15 +222,32 @@ def run_post_class_automation(db: Session, session_id: int, trigger_source: str)
         )
         delete_at = end_time + timedelta(hours=24)
         for target in _teacher_targets_for_session(db, session):
-            queue_teacher_telegram(
+            emit_communication_event(
                 db,
-                teacher_id=target['teacher_id'],
-                chat_id=target['chat_id'],
+                CommunicationEvent(
+                    event_type=CommunicationEventType.ATTENDANCE_SUBMITTED.value,
+                    tenant_id=settings.communication_tenant_id,
+                    actor_id=target['teacher_id'],
+                    entity_type='class_session',
+                    entity_id=session.id,
+                    payload={
+                        'batch_id': batch.id,
+                        'batch_name': batch.name,
+                        'absentees_count': absentees_count,
+                        'fee_due_total': fee_total,
+                        'trigger_source': trigger_source,
+                    },
+                    channels=['telegram'],
+                ),
                 message=message,
+                chat_id=target['chat_id'],
+                teacher_id=target['teacher_id'],
                 batch_id=batch.id,
                 delete_at=delete_at,
                 notification_type='post_class_summary',
                 session_id=session.id,
+                reference_id=session.id,
+                time_provider=time_provider,
             )
         notifications_sent.append('post_class_summary')
     else:

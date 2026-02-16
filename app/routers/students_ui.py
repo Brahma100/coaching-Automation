@@ -1,5 +1,3 @@
-from datetime import date, timedelta
-
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -7,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.domain.services.student_service import create_student as domain_create_student, update_student as domain_update_student
 from app.models import (
     AttendanceRecord,
     Batch,
@@ -23,10 +22,8 @@ from app.models import (
     StudentRiskProfile,
     StudentBatchMap,
 )
-from app.services.fee_service import build_upi_link
-from app.services.parent_service import create_parent, link_parent_student
 from app.services.auth_service import validate_session_token
-from app.services.batch_membership_service import ensure_active_student_batch_mapping
+from app.services.student_notification_service import notify_student
 
 
 templates = Jinja2Templates(directory='app/ui/templates')
@@ -48,6 +45,34 @@ def _require_teacher(request: Request):
     if not session or session['role'] not in ('teacher', 'admin'):
         raise HTTPException(status_code=401, detail='Unauthorized')
     return session
+
+
+def _notify_student_profile_change(
+    db: Session,
+    *,
+    student: Student,
+    old_name: str,
+    old_phone: str,
+    old_batch_name: str,
+    new_batch_name: str,
+) -> None:
+    changes: list[str] = []
+    if old_name != student.name:
+        changes.append(f"Name: {old_name or 'N/A'} -> {student.name or 'N/A'}")
+    if old_phone != student.guardian_phone:
+        changes.append(f"Phone: {old_phone or 'N/A'} -> {student.guardian_phone or 'N/A'}")
+    if old_batch_name != new_batch_name:
+        changes.append(f"Batch: {old_batch_name or 'N/A'} -> {new_batch_name or 'N/A'}")
+    if not changes:
+        return
+    message = "Your student profile has been updated:\n" + "\n".join(f"- {item}" for item in changes)
+    notify_student(
+        db,
+        student=student,
+        message=message,
+        notification_type="student_profile_updated",
+        critical=True,
+    )
 
 
 @router.get('/ui/students')
@@ -87,45 +112,27 @@ def students_create(
     _: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
-    student = Student(
-        name=name.strip(),
-        guardian_phone=phone.strip(),
+    student, batch = domain_create_student(
+        db,
+        name=name,
+        phone=phone,
         batch_id=batch_id,
+        parent_phone=parent_phone,
+        default_initial_fee_amount=DEFAULT_INITIAL_FEE_AMOUNT,
     )
-    db.add(student)
-    db.commit()
-    db.refresh(student)
-    ensure_active_student_batch_mapping(db, student_id=student.id, batch_id=batch_id)
-
-    if parent_phone.strip():
-        parent = db.query(Parent).filter(Parent.phone == parent_phone.strip()).first()
-        if not parent:
-            parent = create_parent(
-                db,
-                name=f'{student.name} Guardian',
-                phone=parent_phone.strip(),
-            )
-        link_parent_student(db, parent_id=parent.id, student_id=student.id, relation='guardian')
-
-    due_date = date.today() + timedelta(days=30)
-    fee = FeeRecord(
-        student_id=student.id,
-        due_date=due_date,
-        amount=DEFAULT_INITIAL_FEE_AMOUNT,
-        paid_amount=0,
-        is_paid=False,
+    notify_student(
+        db,
+        student=student,
+        message=(
+            "Welcome to LearningMate.\n"
+            f"Your profile is created.\n"
+            f"Name: {student.name}\n"
+            f"Batch: {batch.name if batch else student.batch_id}\n"
+            f"Phone: {student.guardian_phone or 'N/A'}"
+        ),
+        notification_type="student_created",
+        critical=True,
     )
-    fee.upi_link = build_upi_link(student, fee.amount)
-    db.add(fee)
-
-    attendance = AttendanceRecord(
-        student_id=student.id,
-        attendance_date=date.today(),
-        status='Present',
-        comment='Auto-created during onboarding',
-    )
-    db.add(attendance)
-    db.commit()
 
     return RedirectResponse(url='/ui/students', status_code=303)
 
@@ -170,30 +177,31 @@ def students_update_api(
     _: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
-    student = db.query(Student).filter(Student.id == student_id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail='Student not found')
+    try:
+        student, batch, old_name, old_phone, old_batch_name = domain_update_student(
+            db,
+            student_id=student_id,
+            name=payload.name,
+            phone=payload.phone,
+            batch_id=payload.batch_id,
+            parent_phone=payload.parent_phone,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == 'Student not found':
+            raise HTTPException(status_code=404, detail=detail) from exc
+        if detail == 'Batch not found':
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise
 
-    batch = db.query(Batch).filter(Batch.id == payload.batch_id).first()
-    if not batch:
-        raise HTTPException(status_code=404, detail='Batch not found')
-
-    student.name = payload.name.strip()
-    student.guardian_phone = payload.phone.strip()
-    student.batch_id = payload.batch_id
-    db.commit()
-    db.refresh(student)
-    ensure_active_student_batch_mapping(db, student_id=student.id, batch_id=payload.batch_id)
-
-    if payload.parent_phone.strip():
-        parent = db.query(Parent).filter(Parent.phone == payload.parent_phone.strip()).first()
-        if not parent:
-            parent = create_parent(
-                db,
-                name=f'{student.name} Guardian',
-                phone=payload.parent_phone.strip(),
-            )
-        link_parent_student(db, parent_id=parent.id, student_id=student.id, relation='guardian')
+    _notify_student_profile_change(
+        db,
+        student=student,
+        old_name=old_name,
+        old_phone=old_phone,
+        old_batch_name=old_batch_name,
+        new_batch_name=batch.name,
+    )
 
     return {
         'id': student.id,
@@ -213,6 +221,17 @@ def students_delete_api(
     student = db.query(Student).filter(Student.id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail='Student not found')
+    notify_student(
+        db,
+        student=student,
+        message=(
+            "Account update\n"
+            "Your student profile has been removed from the coaching system.\n"
+            "If this is unexpected, please contact admin."
+        ),
+        notification_type="student_deleted",
+        critical=True,
+    )
 
     db.query(AttendanceRecord).filter(AttendanceRecord.student_id == student_id).delete(synchronize_session=False)
     db.query(FeeRecord).filter(FeeRecord.student_id == student_id).delete(synchronize_session=False)

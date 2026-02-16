@@ -116,6 +116,7 @@ class RuleConfigUpsertRequest(BaseModel):
     absence_streak_threshold: int = Field(default=3, ge=1, le=30)
     notify_parent_on_absence: bool = True
     notify_parent_on_fee_due: bool = True
+    enable_student_lifecycle_notifications: bool = True
     reminder_grace_period_days: int = Field(default=0, ge=0, le=30)
     quiet_hours_start: str = '22:00'
     quiet_hours_end: str = '06:00'

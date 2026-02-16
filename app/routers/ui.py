@@ -1,5 +1,5 @@
 import logging
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse
@@ -8,6 +8,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.core.time_provider import default_time_provider
 from app.models import Batch, ClassSession, FeeRecord, PendingAction, Student, StudentBatchMap
 from app.schemas import HomeworkCreateRequest
 from app.services.fee_service import get_fee_dashboard, mark_fee_paid
@@ -25,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 @router.get('/dashboard')
 def dashboard(request: Request, db: Session = Depends(get_db)):
-    insights = generate_insights(db)
-    today = date.today()
+    insights = generate_insights(db, time_provider=default_time_provider)
+    today = default_time_provider.today()
     start_dt = datetime.combine(today, time.min)
     end_dt = start_dt + timedelta(days=1)
     today_session = db.query(ClassSession).filter(

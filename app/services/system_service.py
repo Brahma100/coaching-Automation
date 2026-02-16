@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import BackupLog
+from app.services.center_scope_service import get_current_center_id
 from app.services.google_sheets_backup import backup_daily_to_google_sheet
 
 
@@ -18,7 +19,8 @@ def get_sqlite_db_path() -> Path:
 
 def run_backup_now(db: Session) -> BackupLog:
     try:
-        ok = backup_daily_to_google_sheet(db)
+        center_id = int(get_current_center_id() or 0)
+        ok = backup_daily_to_google_sheet(db, center_id=center_id)
         if ok:
             row = BackupLog(status='success', message='Backup synced to Google Sheets')
         else:

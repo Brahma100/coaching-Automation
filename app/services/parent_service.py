@@ -8,8 +8,17 @@ from app.services.batch_membership_service import list_active_student_ids_for_ba
 from app.services.comms_service import queue_telegram_by_chat_id
 
 
-def create_parent(db: Session, name: str, phone: str = '', telegram_chat_id: str = ''):
-    row = Parent(name=name, phone=phone, telegram_chat_id=telegram_chat_id)
+def create_parent(
+    db: Session,
+    name: str,
+    phone: str = '',
+    telegram_chat_id: str = '',
+    *,
+    center_id: int | None,
+):
+    if center_id is None:
+        raise ValueError('center_id is required')
+    row = Parent(name=name, phone=phone, telegram_chat_id=telegram_chat_id, center_id=int(center_id))
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -17,6 +26,15 @@ def create_parent(db: Session, name: str, phone: str = '', telegram_chat_id: str
 
 
 def link_parent_student(db: Session, parent_id: int, student_id: int, relation: str = 'guardian'):
+    parent = db.query(Parent).filter(Parent.id == parent_id).first()
+    if not parent:
+        raise ValueError('Parent not found')
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise ValueError('Student not found')
+    if int(parent.center_id or 0) != int(student.center_id or 0):
+        raise ValueError('Parent and student must belong to the same center')
+
     existing = db.query(ParentStudentMap).filter(
         ParentStudentMap.parent_id == parent_id,
         ParentStudentMap.student_id == student_id,

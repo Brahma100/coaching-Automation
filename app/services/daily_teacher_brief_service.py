@@ -5,7 +5,10 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import and_, or_
 
 from app.config import settings
+from app.core.time_provider import TimeProvider, default_time_provider
 from app.models import AttendanceRecord, ClassSession, FeeRecord, Homework, HomeworkSubmission, Parent, ParentStudentMap, PendingAction, Student, StudentBatchMap, StudentRiskProfile
+from app.models import AuthUser
+from app.services.teacher_communication_settings_service import get_provider_config_for_teacher
 
 
 def _time_window_for_day(day: date) -> tuple[datetime, datetime]:
@@ -41,14 +44,36 @@ def _student_ids_for_teacher(db, teacher_id: int) -> set[int]:
 
 def resolve_teacher_chat_id(db, teacher_phone: str) -> str:
     clean_phone = ''.join(ch for ch in (teacher_phone or '') if ch.isdigit())
+    auth_user = None
+    if clean_phone:
+        auth_user = db.query(AuthUser).filter(AuthUser.phone == clean_phone).first()
+        if auth_user:
+            try:
+                provider_cfg = get_provider_config_for_teacher(db, int(auth_user.id))
+                configured_chat = str(provider_cfg.get('chat_id') or '').strip().strip('"').strip("'")
+                if configured_chat:
+                    return configured_chat
+            except Exception:
+                pass
+            if auth_user.telegram_chat_id:
+                return str(auth_user.telegram_chat_id)
     parent = db.query(Parent).filter(Parent.phone == clean_phone).first()
     if parent and parent.telegram_chat_id:
         return parent.telegram_chat_id
-    return settings.auth_otp_fallback_chat_id
+    fallback = str(settings.auth_otp_fallback_chat_id or '').strip().strip('"').strip("'")
+    if auth_user:
+        return fallback
+    return fallback
 
 
-def get_today_classes_for_teacher(db, teacher_id: int, day: date | None = None) -> dict:
-    day = day or date.today()
+def get_today_classes_for_teacher(
+    db,
+    teacher_id: int,
+    day: date | None = None,
+    *,
+    time_provider: TimeProvider = default_time_provider,
+) -> dict:
+    day = day or time_provider.today()
     start, end = _time_window_for_day(day)
     rows = (
         db.query(ClassSession)
@@ -78,8 +103,14 @@ def get_today_classes_for_teacher(db, teacher_id: int, day: date | None = None) 
     return {'count': len(classes), 'classes': classes, 'sentence': sentence}
 
 
-def get_absent_students_summary(db, teacher_id: int, day: date | None = None) -> dict:
-    day = day or date.today()
+def get_absent_students_summary(
+    db,
+    teacher_id: int,
+    day: date | None = None,
+    *,
+    time_provider: TimeProvider = default_time_provider,
+) -> dict:
+    day = day or time_provider.today()
     student_ids = _student_ids_for_teacher(db, teacher_id)
     if not student_ids:
         return {'count': 0, 'students': [], 'sentence': 'No mapped students for this teacher.'}
@@ -147,8 +178,14 @@ def get_pending_actions_summary(db, teacher_id: int) -> dict:
     return {'count': len(actions), 'actions': actions, 'sentence': sentence}
 
 
-def get_fee_due_summary(db, teacher_id: int, current_month: date | None = None) -> dict:
-    current_month = current_month or date.today()
+def get_fee_due_summary(
+    db,
+    teacher_id: int,
+    current_month: date | None = None,
+    *,
+    time_provider: TimeProvider = default_time_provider,
+) -> dict:
+    current_month = current_month or time_provider.today()
     start = date(current_month.year, current_month.month, 1)
     next_month = date(current_month.year + (1 if current_month.month == 12 else 0), 1 if current_month.month == 12 else current_month.month + 1, 1)
 
@@ -156,7 +193,7 @@ def get_fee_due_summary(db, teacher_id: int, current_month: date | None = None) 
     if not student_ids:
         return {'count': 0, 'overdue_count': 0, 'rows': [], 'sentence': 'No mapped students for fee summary.'}
 
-    today = date.today()
+    today = time_provider.today()
     rows = (
         db.query(FeeRecord, Student)
         .join(Student, Student.id == FeeRecord.student_id)
@@ -192,12 +229,18 @@ def get_fee_due_summary(db, teacher_id: int, current_month: date | None = None) 
     return {'count': len(payload), 'overdue_count': overdue_count, 'rows': payload, 'sentence': sentence}
 
 
-def get_homework_summary(db, teacher_id: int, upcoming_due: int = 3) -> dict:
+def get_homework_summary(
+    db,
+    teacher_id: int,
+    upcoming_due: int = 3,
+    *,
+    time_provider: TimeProvider = default_time_provider,
+) -> dict:
     student_ids = _student_ids_for_teacher(db, teacher_id)
     if not student_ids:
         return {'count': 0, 'rows': [], 'sentence': 'No mapped students for homework summary.'}
 
-    today = date.today()
+    today = time_provider.today()
     end_date = today + timedelta(days=upcoming_due)
     rows = (
         db.query(Homework)
@@ -271,13 +314,20 @@ def get_risk_summary(db, teacher_id: int) -> dict:
     return {'count': len(students), 'students': students, 'sentence': sentence}
 
 
-def build_daily_teacher_brief(db, teacher_id: int, day: date | None = None, upcoming_due: int = 3) -> dict:
-    day = day or date.today()
-    class_schedule = get_today_classes_for_teacher(db, teacher_id, day=day)
-    absent_students = get_absent_students_summary(db, teacher_id, day=day)
+def build_daily_teacher_brief(
+    db,
+    teacher_id: int,
+    day: date | None = None,
+    upcoming_due: int = 3,
+    *,
+    time_provider: TimeProvider = default_time_provider,
+) -> dict:
+    day = day or time_provider.today()
+    class_schedule = get_today_classes_for_teacher(db, teacher_id, day=day, time_provider=time_provider)
+    absent_students = get_absent_students_summary(db, teacher_id, day=day, time_provider=time_provider)
     pending_actions = get_pending_actions_summary(db, teacher_id)
-    fee_due = get_fee_due_summary(db, teacher_id, current_month=day)
-    homework_due = get_homework_summary(db, teacher_id, upcoming_due=upcoming_due)
+    fee_due = get_fee_due_summary(db, teacher_id, current_month=day, time_provider=time_provider)
+    homework_due = get_homework_summary(db, teacher_id, upcoming_due=upcoming_due, time_provider=time_provider)
     high_risk_students = get_risk_summary(db, teacher_id)
     return {
         'date': day.isoformat(),

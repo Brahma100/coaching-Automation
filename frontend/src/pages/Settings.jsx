@@ -1,9 +1,21 @@
 import React from 'react';
-import { FiBell, FiCalendar, FiMoon, FiPhone, FiShield, FiSun, FiUser } from 'react-icons/fi';
+import { FiBell, FiCalendar, FiGrid, FiMoon, FiPhone, FiShield, FiSun, FiUser } from 'react-icons/fi';
+import { useDispatch, useSelector } from 'react-redux';
+import { Link } from 'react-router-dom';
 
 import useRole from '../hooks/useRole';
 import useTheme from '../hooks/useTheme';
-import { fetchTeacherProfile, fetchTodayBrief, setGlobalToastDurationSeconds, updateTeacherProfile } from '../services/api';
+import useTelegramLink from '../hooks/useTelegramLink';
+import {
+  loadRequested,
+  saveLifecycleRulesRequested,
+  saveProfileRequested,
+  setDeleteMinutes,
+  setEnableAutoDeleteNotesOnExpiry,
+  setLifecycleNotificationsEnabled,
+  setNotificationsOn,
+  setToastDurationSeconds,
+} from '../store/slices/settingsSlice.js';
 
 function formatDateTime(value) {
   if (!value) return 'Not available';
@@ -18,69 +30,82 @@ function formatDateTime(value) {
   }).format(parsed);
 }
 
+function formatRuleScope(scope) {
+  const value = String(scope || '').trim().toLowerCase();
+  if (value === 'batch') return 'Batch';
+  if (value === 'global') return 'Global';
+  if (value === 'default') return 'Default';
+  return 'Unknown';
+}
+
+function formatRoleLabel(role) {
+  const value = String(role || '').trim().toLowerCase();
+  if (value === 'admin') return 'Admin';
+  if (value === 'teacher') return 'Teacher';
+  if (value === 'student') return 'Student';
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : 'User';
+}
+
+function maskPhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return 'Not available';
+  if (digits.length <= 4) return `****${digits}`;
+  return `******${digits.slice(-4)}`;
+}
+
+function profileInitials(profile) {
+  const role = formatRoleLabel(profile?.role || 'user').toUpperCase();
+  return role.slice(0, 2);
+}
+
 function Settings() {
+  const dispatch = useDispatch();
   const { isDark, toggleTheme } = useTheme();
   const { isAdmin } = useRole();
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState('');
-  const [brief, setBrief] = React.useState(null);
-  const [notificationsOn, setNotificationsOn] = React.useState(true);
-  const [profile, setProfile] = React.useState(null);
-  const [deleteMinutes, setDeleteMinutes] = React.useState(15);
-  const [enableAutoDeleteNotesOnExpiry, setEnableAutoDeleteNotesOnExpiry] = React.useState(false);
-  const [toastDurationSeconds, setToastDurationSeconds] = React.useState(5);
-  const [savingProfile, setSavingProfile] = React.useState(false);
+  const { status: telegramLink, beginLink, refreshStatus } = useTelegramLink();
+  const {
+    loading,
+    error,
+    brief,
+    notificationsOn,
+    profile,
+    deleteMinutes,
+    enableAutoDeleteNotesOnExpiry,
+    toastDurationSeconds,
+    savingProfile,
+    lifecycleNotificationsEnabled,
+    savingLifecycleRules,
+    lifecycleRuleConfig,
+  } = useSelector((state) => state.settings || {});
+  const [adminStartOnBrain, setAdminStartOnBrain] = React.useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('admin.start_on_brain') === '1';
+  });
 
   React.useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const [briefPayload, profilePayload] = await Promise.all([fetchTodayBrief(), fetchTeacherProfile()]);
-        if (mounted) {
-          setBrief(briefPayload || null);
-          setProfile(profilePayload || null);
-          setDeleteMinutes(profilePayload?.notification_delete_minutes ?? 15);
-          setEnableAutoDeleteNotesOnExpiry(Boolean(profilePayload?.enable_auto_delete_notes_on_expiry));
-          setToastDurationSeconds(profilePayload?.ui_toast_duration_seconds ?? 5);
-          setGlobalToastDurationSeconds(profilePayload?.ui_toast_duration_seconds ?? 5);
-          setError('');
-        }
-      } catch (err) {
-        if (mounted) {
-          setError(err?.response?.data?.detail || err?.message || 'Could not load profile insights');
-        }
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+    dispatch(loadRequested({ isAdmin }));
+  }, [dispatch, isAdmin]);
 
-  const saveProfile = async () => {
-    setSavingProfile(true);
-    try {
-      const payload = await updateTeacherProfile({
-        notification_delete_minutes: Number(deleteMinutes),
-        enable_auto_delete_notes_on_expiry: Boolean(enableAutoDeleteNotesOnExpiry),
-        ui_toast_duration_seconds: Number(toastDurationSeconds),
-      });
-      setProfile((prev) => ({
-        ...(prev || {}),
-        notification_delete_minutes: payload.notification_delete_minutes,
-        enable_auto_delete_notes_on_expiry: Boolean(payload.enable_auto_delete_notes_on_expiry),
-        ui_toast_duration_seconds: payload.ui_toast_duration_seconds ?? 5,
-      }));
-      setToastDurationSeconds(payload.ui_toast_duration_seconds ?? 5);
-      setGlobalToastDurationSeconds(payload.ui_toast_duration_seconds ?? 5);
-      setError('');
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Could not update profile');
-    } finally {
-      setSavingProfile(false);
+  const saveLifecycleRules = () => {
+    dispatch(saveLifecycleRulesRequested());
+  };
+
+  const saveProfile = () => {
+    dispatch(saveProfileRequested());
+  };
+
+  const toggleAdminStartOnBrain = (value) => {
+    const nextValue = Boolean(value);
+    setAdminStartOnBrain(nextValue);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('admin.start_on_brain', nextValue ? '1' : '0');
     }
   };
+
+  const roleLabel = formatRoleLabel(profile?.role || (isAdmin ? 'admin' : 'teacher'));
+  const profilePhone = maskPhone(profile?.phone);
+  const profileTimezone = String(profile?.timezone || '').trim() || 'Not configured';
+  const profileSubtitle = roleLabel === 'Teacher' ? 'Coaching Faculty' : (roleLabel === 'Admin' ? 'Center Administrator' : 'Student Portal User');
 
   return (
     <section className="space-y-4">
@@ -89,6 +114,28 @@ function Settings() {
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           Manage your account preferences and view your current coaching dashboard identity.
         </p>
+        <div className="mt-4">
+          <div className="flex flex-wrap gap-2">
+            <Link
+              to="/settings/communication"
+              className="inline-flex items-center rounded-lg bg-[#0f766e] px-3 py-2 text-sm font-semibold text-white"
+            >
+              Open Communication Settings
+            </Link>
+            <Link
+              to="/settings/automation-rules"
+              className="inline-flex items-center rounded-lg bg-[#1d4ed8] px-3 py-2 text-sm font-semibold text-white"
+            >
+              Open Automation Rules
+            </Link>
+            <Link
+              to="/settings/integrations"
+              className="inline-flex items-center rounded-lg bg-[#0369a1] px-3 py-2 text-sm font-semibold text-white"
+            >
+              Open Integrations
+            </Link>
+          </div>
+        </div>
       </div>
 
       {error ? (
@@ -101,26 +148,26 @@ function Settings() {
         <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
           <div className="flex items-center gap-4">
             <div className="grid h-16 w-16 place-items-center rounded-full bg-gradient-to-br from-[#ffd6a8] to-[#f08d5f] text-lg font-extrabold text-white">
-              TS
+              {profileInitials(profile)}
             </div>
             <div>
-              <p className="text-lg font-bold text-slate-900 dark:text-slate-100">Teacher</p>
-              <p className="text-sm text-slate-500 dark:text-slate-400">K-12 Coach</p>
+              <p className="text-lg font-bold text-slate-900 dark:text-slate-100">{roleLabel}</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">{profileSubtitle}</p>
             </div>
           </div>
 
           <div className="mt-5 space-y-3 text-sm">
             <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
               <FiUser className="h-4 w-4" />
-              <span>Role: TEACHER</span>
+              <span>Role: {String(profile?.role || roleLabel).toUpperCase()}</span>
             </div>
             <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
               <FiShield className="h-4 w-4" />
-              <span>Access: Protected Session</span>
+              <span>Timezone: {profileTimezone}</span>
             </div>
             <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
               <FiPhone className="h-4 w-4" />
-              <span>Phone: Hidden for privacy</span>
+              <span>Phone: {profilePhone}</span>
             </div>
           </div>
         </div>
@@ -141,17 +188,104 @@ function Settings() {
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Telegram Link</p>
+              <p className="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">
+                {telegramLink.loading ? 'Checking...' : (telegramLink.linked ? 'Linked' : 'Not linked')}
+              </p>
+              {telegramLink.linked ? (
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Linked chat: {telegramLink.chatIdMasked || 'Hidden'}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Link Telegram to receive OTP and all coaching notifications.
+                </p>
+              )}
+              {telegramLink.error ? (
+                <p className="mt-2 text-xs text-rose-600 dark:text-rose-300">{telegramLink.error}</p>
+              ) : null}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={beginLink}
+                  disabled={telegramLink.starting}
+                  className="rounded-lg bg-[#0f766e] px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  {telegramLink.starting ? 'Opening Telegram...' : (telegramLink.linked ? 'Relink Telegram' : 'Link Telegram')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => refreshStatus()}
+                  disabled={telegramLink.checking}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200"
+                >
+                  {telegramLink.checking ? 'Checking...' : 'Refresh Status'}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Notifications</p>
               <p className="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">{notificationsOn ? 'Enabled' : 'Muted'}</p>
               <button
                 type="button"
-                onClick={() => setNotificationsOn((prev) => !prev)}
+                onClick={() => dispatch(setNotificationsOn(!notificationsOn))}
                 className="mt-3 inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200"
               >
                 <FiBell className="h-4 w-4" />
                 {notificationsOn ? 'Mute Alerts' : 'Enable Alerts'}
               </button>
             </div>
+
+            {isAdmin ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Student Lifecycle Alerts</p>
+                <p className="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">
+                  {lifecycleNotificationsEnabled ? 'Enabled' : 'Disabled'}
+                </p>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Rule scope: {formatRuleScope(lifecycleRuleConfig?.scope)}
+                </p>
+                <label className="mt-3 inline-flex cursor-pointer items-center gap-3 text-sm text-slate-700 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={lifecycleNotificationsEnabled}
+                    onChange={(event) => dispatch(setLifecycleNotificationsEnabled(event.target.checked))}
+                    className="h-4 w-4 rounded border-slate-300 text-[#2f7bf6] focus:ring-[#2f7bf6]"
+                  />
+                  Notify for create/delete/enroll/unenroll/batch-delete events
+                </label>
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={saveLifecycleRules}
+                    disabled={savingLifecycleRules}
+                    className="rounded-lg bg-[#2f7bf6] px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {isAdmin ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Admin Start Page</p>
+                <p className="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">
+                  {adminStartOnBrain ? 'Operational Brain' : 'Dashboard'}
+                </p>
+                <label className="mt-3 inline-flex cursor-pointer items-center gap-3 text-sm text-slate-700 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={adminStartOnBrain}
+                    onChange={(event) => toggleAdminStartOnBrain(event.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-[#2f7bf6] focus:ring-[#2f7bf6]"
+                  />
+                  <FiGrid className="h-4 w-4" />
+                  Start admin login on /brain
+                </label>
+              </div>
+            ) : null}
 
             <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Auto-delete (min)</p>
@@ -162,7 +296,7 @@ function Settings() {
                   min={1}
                   max={240}
                   value={deleteMinutes}
-                  onChange={(event) => setDeleteMinutes(event.target.value)}
+                  onChange={(event) => dispatch(setDeleteMinutes(event.target.value))}
                   className="w-24 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
                 />
                 <button
@@ -185,7 +319,7 @@ function Settings() {
                 <input
                   type="checkbox"
                   checked={enableAutoDeleteNotesOnExpiry}
-                  onChange={(event) => setEnableAutoDeleteNotesOnExpiry(event.target.checked)}
+                  onChange={(event) => dispatch(setEnableAutoDeleteNotesOnExpiry(event.target.checked))}
                   className="h-4 w-4 rounded border-slate-300 text-[#2f7bf6] focus:ring-[#2f7bf6]"
                 />
                 Enable Auto Delete Notes on Expiry
@@ -211,7 +345,7 @@ function Settings() {
                   min={1}
                   max={30}
                   value={toastDurationSeconds}
-                  onChange={(event) => setToastDurationSeconds(event.target.value)}
+                  onChange={(event) => dispatch(setToastDurationSeconds(event.target.value))}
                   className="w-24 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
                 />
                 <button

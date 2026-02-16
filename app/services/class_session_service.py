@@ -3,7 +3,9 @@ from datetime import date, datetime, time
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.time_provider import TimeProvider, default_time_provider
 from app.models import Batch, BatchSchedule, ClassSession
+from app.services.time_capacity_service import clear_time_capacity_cache
 
 
 def _scheduled_datetime_for_batch(batch: Batch, target_date: date) -> datetime:
@@ -70,6 +72,8 @@ def create_class_session(
     topic_planned: str = '',
     duration_minutes: int = 60,
 ):
+    batch = db.query(Batch).filter(Batch.id == batch_id).first()
+    center_id = int(batch.center_id or 1) if batch else 1
     row = ClassSession(
         batch_id=batch_id,
         subject=subject,
@@ -77,11 +81,13 @@ def create_class_session(
         duration_minutes=duration_minutes,
         topic_planned=topic_planned,
         teacher_id=teacher_id,
+        center_id=center_id,
         status='scheduled',
     )
     db.add(row)
     db.commit()
     db.refresh(row)
+    clear_time_capacity_cache()
     return row
 
 
@@ -93,29 +99,42 @@ def list_batch_sessions(db: Session, batch_id: int, limit: int = 30):
     return db.query(ClassSession).filter(ClassSession.batch_id == batch_id).order_by(ClassSession.scheduled_start.desc()).limit(limit).all()
 
 
-def start_class_session(db: Session, session_id: int):
+def start_class_session(
+    db: Session,
+    session_id: int,
+    *,
+    time_provider: TimeProvider = default_time_provider,
+):
     row = get_session(db, session_id)
     if not row:
         raise ValueError('Class session not found')
     if row.status in ('closed', 'missed'):
         raise ValueError('Class session is closed')
     row.status = 'open'
-    row.actual_start = row.actual_start or datetime.utcnow()
+    row.actual_start = row.actual_start or time_provider.now().replace(tzinfo=None)
     db.commit()
     db.refresh(row)
+    clear_time_capacity_cache()
     return row
 
 
-def complete_class_session(db: Session, session_id: int, topic_completed: str = ''):
+def complete_class_session(
+    db: Session,
+    session_id: int,
+    topic_completed: str = '',
+    *,
+    time_provider: TimeProvider = default_time_provider,
+):
     row = get_session(db, session_id)
     if not row:
         raise ValueError('Class session not found')
     row.status = 'submitted'
-    row.actual_start = row.actual_start or datetime.utcnow()
+    row.actual_start = row.actual_start or time_provider.now().replace(tzinfo=None)
     if topic_completed:
         row.topic_completed = topic_completed
     db.commit()
     db.refresh(row)
+    clear_time_capacity_cache()
     return row
 
 
@@ -128,6 +147,7 @@ def get_or_create_session_for_attendance(
     scheduled_start: datetime | None,
     topic_planned: str,
     topic_completed: str,
+    time_provider: TimeProvider = default_time_provider,
 ):
     resolved_scheduled_start, resolved_duration = _resolve_schedule_for_date(
         db=db,
@@ -156,9 +176,10 @@ def get_or_create_session_for_attendance(
         if resolved_scheduled_start:
             existing.scheduled_start = resolved_scheduled_start
         existing.status = 'submitted'
-        existing.actual_start = existing.actual_start or datetime.utcnow()
-        db.commit()
+        existing.actual_start = existing.actual_start or time_provider.now().replace(tzinfo=None)
+        db.flush()
         db.refresh(existing)
+        clear_time_capacity_cache()
         return existing
 
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
@@ -170,15 +191,17 @@ def get_or_create_session_for_attendance(
         subject=subject or 'General',
         scheduled_start=resolved_scheduled_start or _scheduled_datetime_for_batch(batch, attendance_date),
         duration_minutes=resolved_duration or 60,
-        actual_start=datetime.utcnow(),
+        actual_start=time_provider.now().replace(tzinfo=None),
         topic_planned=topic_planned,
         topic_completed=topic_completed,
         teacher_id=teacher_id,
+        center_id=int(batch.center_id or 1),
         status='submitted',
     )
     db.add(row)
-    db.commit()
+    db.flush()
     db.refresh(row)
+    clear_time_capacity_cache()
     return row
 
 
@@ -192,4 +215,5 @@ def reopen_session(db: Session, session_id: int, admin_only: bool = True):
         row.closed_at = None
         db.commit()
         db.refresh(row)
+        clear_time_capacity_cache()
     return row

@@ -1,42 +1,34 @@
 import React from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { useDispatch, useSelector } from 'react-redux';
 
 import { InlineSkeletonText } from '../components/Skeleton.jsx';
-import { fetchFees } from '../services/api';
+import {
+  clearFilters,
+  loadRequested,
+  setMonthFilter,
+  setSearch,
+  setStatusFilter,
+} from '../store/slices/feesSlice.js';
 
 function normalizeList(value) {
   return Array.isArray(value) ? value : [];
 }
 
 function Fees() {
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState('');
-  const [fees, setFees] = React.useState({ due: [], overdue: [], paid: [] });
-  const [search, setSearch] = React.useState('');
-  const [statusFilter, setStatusFilter] = React.useState('all');
-  const [monthFilter, setMonthFilter] = React.useState('all');
+  const dispatch = useDispatch();
+  const {
+    loading,
+    error,
+    fees,
+    search,
+    statusFilter,
+    monthFilter,
+  } = useSelector((state) => state.fees || {});
 
   React.useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const payload = await fetchFees();
-        const nextFees = {
-          due: normalizeList(payload?.due),
-          overdue: normalizeList(payload?.overdue),
-          paid: normalizeList(payload?.paid)
-        };
-        if (mounted) setFees(nextFees);
-      } catch (err) {
-        if (mounted) setError(err?.message || 'Failed to load fees');
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+    dispatch(loadRequested());
+  }, [dispatch]);
 
   const overdue = normalizeList(fees.overdue);
   const due = normalizeList(fees.due);
@@ -87,11 +79,7 @@ function Fees() {
           <h2 className="text-[30px] font-extrabold text-slate-900">Fees</h2>
           <button
             type="button"
-            onClick={() => {
-              setSearch('');
-              setStatusFilter('all');
-              setMonthFilter('all');
-            }}
+            onClick={() => dispatch(clearFilters())}
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
           >
             Clear Filter
@@ -112,15 +100,15 @@ function Fees() {
             placeholder="Search student"
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => dispatch(setSearch(e.target.value))}
           />
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <select value={statusFilter} onChange={(e) => dispatch(setStatusFilter(e.target.value))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
             <option value="all">All Status</option>
             <option value="paid">Paid</option>
             <option value="due">Due</option>
             <option value="overdue">Overdue</option>
           </select>
-          <select value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <select value={monthFilter} onChange={(e) => dispatch(setMonthFilter(e.target.value))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
             <option value="all">All Months</option>
             {uniqueMonths.map((month) => (
               <option key={month} value={month}>{month}</option>

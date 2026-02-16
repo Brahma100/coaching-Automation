@@ -12,20 +12,111 @@ import typing
 from typing import Any, Callable
 
 from app.config import settings
+from app.core.time_provider import default_time_provider
 from app.metrics import record_cache_event
+from app.services.observability_counters import record_observability_event
 
 
 logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> datetime:
-    return datetime.utcnow()
+    return default_time_provider.now().replace(tzinfo=None)
 
 
 def cache_key(prefix: str, identifier: str | int | None = None) -> str:
     if identifier is None or identifier == '':
         return prefix
     return f"{prefix}:{identifier}"
+
+
+def _current_center_id() -> int | None:
+    try:
+        from app.services.center_scope_service import get_current_center_id
+
+        return get_current_center_id()
+    except Exception:
+        return None
+
+
+def _extract_center_from_key(key: str) -> int | None:
+    text = str(key or '').strip()
+    if not text.startswith('center:'):
+        return None
+    parts = text.split(':', 2)
+    if len(parts) < 3:
+        return None
+    try:
+        return int(parts[1])
+    except Exception:
+        return None
+
+
+def _strip_center_prefix(key: str) -> str:
+    text = str(key or '')
+    if not text.startswith('center:'):
+        return text
+    parts = text.split(':', 2)
+    if len(parts) < 3:
+        return text
+    return parts[2]
+
+
+def _effective_center_namespace() -> int:
+    return int(_current_center_id() or 0)
+
+
+def _scope_cache_key(key: str) -> str:
+    center_id = _effective_center_namespace()
+    requested_center = _extract_center_from_key(key)
+    if requested_center is not None:
+        if center_id > 0 and requested_center != center_id:
+            logger.error(
+                'cache_center_mismatch_detected',
+                extra={
+                    'op': 'scope_key',
+                    'current_center_id': center_id,
+                    'requested_center_id': requested_center,
+                    'key': str(key),
+                },
+            )
+            record_observability_event('cache_center_mismatch')
+            return f"center:{center_id}:{_strip_center_prefix(key)}"
+        return str(key)
+    return f"center:{center_id}:{key}"
+
+
+def _scope_cache_prefix(prefix: str) -> str:
+    center_id = _effective_center_namespace()
+    requested_center = _extract_center_from_key(prefix)
+    if requested_center is not None:
+        if center_id > 0 and requested_center != center_id:
+            logger.error(
+                'cache_center_mismatch_detected',
+                extra={
+                    'op': 'scope_prefix',
+                    'current_center_id': center_id,
+                    'requested_center_id': requested_center,
+                    'prefix': str(prefix),
+                },
+            )
+            record_observability_event('cache_center_mismatch')
+            return f"center:{center_id}:{_strip_center_prefix(prefix)}"
+        return str(prefix)
+    return f"center:{center_id}:{prefix}"
+
+
+def _extract_payload_center_id(value: Any) -> int | None:
+    if not isinstance(value, dict):
+        return None
+    raw = value.get('center_id')
+    if raw is None:
+        return None
+    try:
+        cid = int(raw)
+        return cid if cid > 0 else None
+    except Exception:
+        return None
 
 
 def _normalize_bool(value: Any) -> bool:
@@ -137,29 +228,61 @@ class CacheManager:
         return bypass_cache(context)
 
     def get_cached(self, key: str) -> Any | None:
-        value = self.backend.get(key)
+        requested_center = _extract_center_from_key(key)
+        current_center = _effective_center_namespace()
+        if requested_center is not None and current_center > 0 and requested_center != current_center:
+            logger.error(
+                'cache_center_mismatch_detected',
+                extra={
+                    'op': 'get',
+                    'current_center_id': current_center,
+                    'requested_center_id': requested_center,
+                    'key': str(key),
+                },
+            )
+            record_observability_event('cache_center_mismatch')
+            return None
+        scoped_key = _scope_cache_key(key)
+        value = self.backend.get(scoped_key)
         if value is not None:
             record_cache_event('cache_hit')
-            logger.debug('cache hit: %s', key)
+            logger.debug('cache hit: %s', scoped_key)
         else:
             record_cache_event('cache_miss')
-            logger.debug('cache miss: %s', key)
+            logger.debug('cache miss: %s', scoped_key)
         return value
 
     def set_cached(self, key: str, value: Any, ttl: int | None = None) -> None:
         ttl_value = ttl if ttl is not None else settings.default_cache_ttl
-        self.backend.set(key, value, ttl_value)
-        logger.debug('cache set: %s ttl=%s', key, ttl_value)
+        payload_center_id = _extract_payload_center_id(value)
+        current_center = _effective_center_namespace()
+        if payload_center_id is not None and current_center > 0 and payload_center_id != current_center:
+            logger.error(
+                'cache_center_mismatch_detected',
+                extra={
+                    'op': 'set',
+                    'current_center_id': current_center,
+                    'payload_center_id': payload_center_id,
+                    'key': str(key),
+                },
+            )
+            record_observability_event('cache_center_mismatch')
+            return
+        scoped_key = _scope_cache_key(key)
+        self.backend.set(scoped_key, value, ttl_value)
+        logger.debug('cache set: %s ttl=%s', scoped_key, ttl_value)
 
     def invalidate(self, key: str) -> None:
-        self.backend.delete(key)
+        scoped_key = _scope_cache_key(key)
+        self.backend.delete(scoped_key)
         record_cache_event('cache_invalidate')
-        logger.debug('cache invalidate: %s', key)
+        logger.debug('cache invalidate: %s', scoped_key)
 
     def invalidate_prefix(self, prefix: str) -> None:
-        self.backend.delete_prefix(prefix)
+        scoped_prefix = _scope_cache_prefix(prefix)
+        self.backend.delete_prefix(scoped_prefix)
         record_cache_event('cache_invalidate')
-        logger.debug('cache invalidate prefix: %s', prefix)
+        logger.debug('cache invalidate prefix: %s', scoped_prefix)
 
 
 def _build_cache_backend() -> CacheBackend:

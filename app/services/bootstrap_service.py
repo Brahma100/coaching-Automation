@@ -4,6 +4,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.phone import normalize_phone as _core_normalize_phone
 from app.models import AllowedUser, AllowedUserStatus, Role, RuleConfig, StaffUser
 
 
@@ -15,7 +16,8 @@ def _hash_password(raw: str) -> str:
 
 
 def _normalize_phone(value: str) -> str:
-    return ''.join(ch for ch in (value or '') if ch.isdigit())
+    # DEPRECATED: use app.core.phone.normalize_phone directly.
+    return _core_normalize_phone(value)
 
 
 def _seed_default_allowed_admin_if_needed(db: Session) -> dict:

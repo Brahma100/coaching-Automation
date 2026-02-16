@@ -9,7 +9,18 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base, get_db
-from app.models import ActionToken, AttendanceRecord, Batch, BatchSchedule, ClassSession, PendingAction, Role, Student
+from app.models import (
+    ActionToken,
+    AttendanceRecord,
+    AuthUser,
+    Batch,
+    BatchSchedule,
+    ClassSession,
+    PendingAction,
+    Role,
+    Student,
+    TeacherBatchMap,
+)
 from app.routers import attendance_session_ui
 from app.services.action_token_service import create_action_token
 from app.services.class_session_resolver import resolve_or_create_class_session
@@ -63,13 +74,17 @@ class AttendanceSessionUiTests(unittest.TestCase):
             db.query(ActionToken).delete()
             db.query(AttendanceRecord).delete()
             db.query(ClassSession).delete()
+            db.query(TeacherBatchMap).delete()
             db.query(Student).delete()
             db.query(BatchSchedule).delete()
             db.query(Batch).delete()
+            db.query(AuthUser).delete()
             batch = Batch(name='Math_X', start_time='08:00', subject='Math', active=True)
             db.add(batch)
             db.commit()
             db.refresh(batch)
+            db.add(AuthUser(id=10, phone='9000000000', role=Role.TEACHER.value, center_id=int(batch.center_id or 1)))
+            db.add(TeacherBatchMap(teacher_id=10, batch_id=batch.id, center_id=int(batch.center_id or 1), is_primary=True))
             db.add(BatchSchedule(batch_id=batch.id, weekday=date.today().weekday(), start_time='08:00', duration_minutes=60))
             db.add(Student(name='A', guardian_phone='9999999991', batch_id=batch.id))
             db.add(Student(name='B', guardian_phone='9999999992', batch_id=batch.id))

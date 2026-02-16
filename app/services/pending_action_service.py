@@ -1,7 +1,8 @@
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from app.models import PendingAction
+from app.core.time_provider import TimeProvider, default_time_provider
+from app.models import ClassSession, PendingAction, Student
 from app.services import snapshot_service
 
 
@@ -27,6 +28,18 @@ def create_pending_action(
     if existing:
         return existing
 
+    center_id = 0
+    if session_id:
+        session_row = db.query(ClassSession).filter(ClassSession.id == session_id).first()
+        if session_row:
+            center_id = int(session_row.center_id or center_id)
+    if student_id and center_id <= 0:
+        student_row = db.query(Student).filter(Student.id == student_id).first()
+        if student_row:
+            center_id = int(student_row.center_id or center_id)
+    if center_id <= 0:
+        center_id = 1
+
     row = PendingAction(
         type=action_type,
         action_type=action_type,
@@ -37,6 +50,7 @@ def create_pending_action(
         status='open',
         note=note,
         due_at=due_at,
+        center_id=center_id,
     )
     db.add(row)
     db.commit()
@@ -56,12 +70,18 @@ def list_open_actions(db: Session):
     return db.query(PendingAction).filter(PendingAction.status == 'open').order_by(PendingAction.created_at.desc()).all()
 
 
-def resolve_action(db: Session, action_id: int, resolution_note: str | None = None):
+def resolve_action(
+    db: Session,
+    action_id: int,
+    resolution_note: str | None = None,
+    *,
+    time_provider: TimeProvider = default_time_provider,
+):
     row = db.query(PendingAction).filter(PendingAction.id == action_id).first()
     if not row:
         raise ValueError('Pending action not found')
     row.status = 'resolved'
-    row.resolved_at = datetime.utcnow()
+    row.resolved_at = time_provider.now().replace(tzinfo=None)
     if resolution_note:
         row.resolution_note = resolution_note
     db.commit()
@@ -85,6 +105,7 @@ def resolve_action_by_type(
     session_id: int | None,
     student_id: int | None = None,
     resolution_note: str | None = None,
+    time_provider: TimeProvider = default_time_provider,
 ):
     row = db.query(PendingAction).filter(
         PendingAction.action_type == action_type,
@@ -96,7 +117,7 @@ def resolve_action_by_type(
     if not row:
         return None
     row.status = 'resolved'
-    row.resolved_at = datetime.utcnow()
+    row.resolved_at = time_provider.now().replace(tzinfo=None)
     if resolution_note:
         row.resolution_note = resolution_note
     db.commit()

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.cache import cache, cache_key
+from app.cache import cache
 from app.db import get_db
 from app.schemas import HomeworkCreateRequest, HomeworkSubmissionRequest
 from app.services.homework_service import create_homework, list_homework, list_submissions, submit_homework
@@ -34,8 +34,8 @@ def list_all(db: Session = Depends(get_db)):
 @router.post('/submit')
 def submit(payload: HomeworkSubmissionRequest, db: Session = Depends(get_db)):
     row = submit_homework(db, payload.model_dump())
-    cache.invalidate(cache_key('student_dashboard', row.student_id))
-    cache.invalidate('admin_ops')
+    cache.invalidate_prefix('student_dashboard')
+    cache.invalidate_prefix('admin_ops')
     return {'id': row.id, 'homework_id': row.homework_id, 'student_id': row.student_id}
 
 

@@ -1,164 +1,96 @@
 import React from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 import Modal from '../components/Modal.jsx';
 import { PageSkeleton } from '../components/Skeleton.jsx';
-import { createReferral, createStudent, deleteStudent, fetchBatches, fetchStudents, updateStudent } from '../services/api';
-
-const pieColors = ['#2f7bf6', '#10b981'];
-
-function normalizeList(value) {
-  return Array.isArray(value) ? value : [];
-}
+import { selectStudentsPageState } from '../store/selectors/studentsSelectors.js';
+import {
+  addReferralRequested,
+  clearError,
+  clearFilters,
+  clearReferralNotice,
+  closeDeleteModal,
+  closeForm,
+  deleteStudentRequested,
+  loadRequested,
+  openAddForm,
+  openDeleteModal,
+  openEditForm,
+  saveStudentRequested,
+  setBatchFilter,
+  setFormField,
+  setSearch,
+} from '../store/slices/studentsSlice.js';
 
 function Students() {
-  const [state, setState] = React.useState({ loading: true, error: '', rows: [] });
-  const [batches, setBatches] = React.useState([]);
-  const [busyId, setBusyId] = React.useState(null);
-  const [search, setSearch] = React.useState('');
-  const [batchFilter, setBatchFilter] = React.useState('all');
-
-  const [formOpen, setFormOpen] = React.useState(false);
-  const [formMode, setFormMode] = React.useState('add');
-  const [editingStudent, setEditingStudent] = React.useState(null);
-  const [formData, setFormData] = React.useState({ name: '', phone: '', batch_id: '', parent_phone: '' });
-
-  const [deleteOpen, setDeleteOpen] = React.useState(false);
-  const [deleteStudentRow, setDeleteStudentRow] = React.useState(null);
-
-  const loadAll = React.useCallback(async () => {
-    try {
-      const [studentsPayload, batchesPayload] = await Promise.all([fetchStudents(), fetchBatches().catch(() => [])]);
-      const rows = normalizeList(studentsPayload?.rows ?? studentsPayload);
-      const nextBatches = normalizeList(batchesPayload?.rows ?? batchesPayload);
-      setState({ loading: false, error: '', rows });
-      setBatches(nextBatches);
-      if (!formData.batch_id && nextBatches[0]?.id) {
-        setFormData((prev) => ({ ...prev, batch_id: String(nextBatches[0].id) }));
-      }
-    } catch (err) {
-      setState({ loading: false, error: err?.response?.data?.detail || err?.message || 'Failed to load students', rows: [] });
-    }
-  }, [formData.batch_id]);
+  const dispatch = useDispatch();
+  const {
+    loading,
+    error,
+    busyId,
+    search,
+    batchFilter,
+    batches,
+    formOpen,
+    formMode,
+    editingStudent,
+    formData,
+    deleteOpen,
+    deleteStudentRow,
+    referralNotice,
+    filteredRows,
+    batchChartData,
+    parentPieData,
+    pieColors,
+  } = useSelector(selectStudentsPageState);
 
   React.useEffect(() => {
-    loadAll();
-  }, [loadAll]);
+    dispatch(loadRequested());
+  }, [dispatch]);
 
-  const rows = normalizeList(state.rows);
-  const safeBatches = normalizeList(batches);
+  React.useEffect(() => {
+    if (!referralNotice) return;
+    window.alert(referralNotice);
+    dispatch(clearReferralNotice());
+  }, [dispatch, referralNotice]);
 
-  const filteredRows = rows.filter((row) => {
-    const text = `${row.name || ''} ${row.phone || ''} ${row.parent_phone || ''}`.toLowerCase();
-    const searchMatch = text.includes(search.toLowerCase().trim());
-    const batchMatch = batchFilter === 'all' ? true : String(row.batch_id) === batchFilter;
-    return searchMatch && batchMatch;
-  });
-
-  const batchStatsMap = filteredRows.reduce((acc, row) => {
-    const key = row.batch || `Batch ${row.batch_id}`;
-    acc[key] = (acc[key] || 0) + 1;
-    return acc;
-  }, {});
-
-  const batchChartData = Object.entries(batchStatsMap).map(([name, count]) => ({ name, count }));
-  const withParent = filteredRows.filter((row) => (row.parent_phone || '').trim()).length;
-  const withoutParent = Math.max(filteredRows.length - withParent, 0);
-  const parentPieData = [
-    { name: 'Parent Linked', value: withParent },
-    { name: 'Missing Parent', value: withoutParent }
-  ];
-
-  const openAddForm = () => {
-    setFormMode('add');
-    setEditingStudent(null);
-    setFormData({
-      name: '',
-      phone: '',
-      batch_id: String(safeBatches[0]?.id || ''),
-      parent_phone: ''
-    });
-    setFormOpen(true);
-  };
-
-  const openEditForm = (row) => {
-    setFormMode('edit');
-    setEditingStudent(row);
-    setFormData({
-      name: row.name || '',
-      phone: row.phone || row.guardian_phone || '',
-      batch_id: String(row.batch_id || ''),
-      parent_phone: row.parent_phone || ''
-    });
-    setFormOpen(true);
-  };
-
-  const onSubmitForm = async (event) => {
+  const onSubmitForm = (event) => {
     event.preventDefault();
-    if (!formData.name.trim() || !formData.batch_id) {
-      return;
-    }
-
-    setBusyId('save-form');
-    try {
-      if (formMode === 'add') {
-        await createStudent(formData);
-      } else if (editingStudent) {
-        await updateStudent(editingStudent.id, {
-          name: formData.name,
-          phone: formData.phone,
-          batch_id: Number(formData.batch_id),
-          parent_phone: formData.parent_phone
-        });
-      }
-      setFormOpen(false);
-      await loadAll();
-    } catch (err) {
-      setState((prev) => ({ ...prev, error: err?.response?.data?.detail || err?.message || 'Save failed' }));
-    } finally {
-      setBusyId(null);
-    }
+    dispatch(
+      saveStudentRequested({
+        mode: formMode,
+        editingStudentId: editingStudent?.id,
+        formData,
+      })
+    );
   };
 
-  const openDeleteModal = (row) => {
-    setDeleteStudentRow(row);
-    setDeleteOpen(true);
+  const onConfirmDelete = () => {
+    if (!deleteStudentRow?.id) return;
+    dispatch(deleteStudentRequested({ studentId: deleteStudentRow.id }));
   };
 
-  const onConfirmDelete = async () => {
-    if (!deleteStudentRow) return;
-    setBusyId(`delete-${deleteStudentRow.id}`);
-    try {
-      await deleteStudent(deleteStudentRow.id);
-      setDeleteOpen(false);
-      setDeleteStudentRow(null);
-      await loadAll();
-    } catch (err) {
-      setState((prev) => ({ ...prev, error: err?.response?.data?.detail || err?.message || 'Delete failed' }));
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const onAddReferral = async (studentId) => {
-    setBusyId(`ref-${studentId}`);
-    try {
-      await createReferral(studentId);
-      window.alert('Referral created successfully.');
-    } catch (err) {
-      setState((prev) => ({ ...prev, error: err?.response?.data?.detail || err?.message || 'Referral failed' }));
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  if (state.loading) {
+  if (loading) {
     return <PageSkeleton />;
   }
 
   return (
     <section className="space-y-4">
-      {state.error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{state.error}</div> : null}
+      {error ? (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <div className="flex items-center justify-between gap-3">
+            <span>{error}</span>
+            <button
+              type="button"
+              onClick={() => dispatch(clearError())}
+              className="rounded bg-rose-600 px-2 py-1 text-xs font-semibold text-white"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -215,7 +147,7 @@ function Students() {
           <h2 className="text-2xl font-extrabold text-slate-900 sm:text-[30px]">Students</h2>
           <button
             type="button"
-            onClick={openAddForm}
+            onClick={() => dispatch(openAddForm())}
             className="action-glow-btn rounded-lg bg-[#2f7bf6] px-4 py-2 text-sm font-semibold text-white hover:bg-[#225fca]"
           >
             Add Student
@@ -227,25 +159,24 @@ function Students() {
             placeholder="Search by student/phone/parent"
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => dispatch(setSearch(e.target.value))}
           />
           <select
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
             value={batchFilter}
-            onChange={(e) => setBatchFilter(e.target.value)}
+            onChange={(e) => dispatch(setBatchFilter(e.target.value))}
           >
             <option value="all">All Batches</option>
-            {safeBatches.map((batch) => (
-              <option key={batch.id} value={batch.id}>{batch.name}</option>
+            {batches.map((batch) => (
+              <option key={batch.id} value={batch.id}>
+                {batch.name}
+              </option>
             ))}
           </select>
           <button
             type="button"
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
-            onClick={() => {
-              setSearch('');
-              setBatchFilter('all');
-            }}
+            onClick={() => dispatch(clearFilters())}
           >
             Clear Filter
           </button>
@@ -273,14 +204,14 @@ function Students() {
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => openEditForm(row)}
+                        onClick={() => dispatch(openEditForm(row))}
                         className="rounded bg-blue-600 px-2 py-1 text-xs font-semibold text-white"
                       >
                         Edit
                       </button>
                       <button
                         type="button"
-                        onClick={() => openDeleteModal(row)}
+                        onClick={() => dispatch(openDeleteModal(row))}
                         disabled={busyId === `delete-${row.id}`}
                         className="rounded bg-rose-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-60"
                       >
@@ -288,7 +219,7 @@ function Students() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => onAddReferral(row.id)}
+                        onClick={() => dispatch(addReferralRequested({ studentId: row.id }))}
                         disabled={busyId === `ref-${row.id}`}
                         className="rounded bg-amber-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-60"
                       >
@@ -300,7 +231,9 @@ function Students() {
               ))}
               {filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-3 py-6 text-center text-slate-500">No students match your filter.</td>
+                  <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
+                    No students match your filter.
+                  </td>
                 </tr>
               ) : null}
             </tbody>
@@ -311,10 +244,16 @@ function Students() {
       <Modal
         open={formOpen}
         title={formMode === 'add' ? 'Add Student' : 'Edit Student'}
-        onClose={() => setFormOpen(false)}
+        onClose={() => dispatch(closeForm())}
         footer={(
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setFormOpen(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700">Cancel</button>
+            <button
+              type="button"
+              onClick={() => dispatch(closeForm())}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
+            >
+              Cancel
+            </button>
             <button
               type="submit"
               form="student-form-modal"
@@ -332,30 +271,32 @@ function Students() {
             placeholder="Student name"
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
             value={formData.name}
-            onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
+            onChange={(e) => dispatch(setFormField({ field: 'name', value: e.target.value }))}
           />
           <input
             placeholder="Phone"
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
             value={formData.phone}
-            onChange={(e) => setFormData((prev) => ({ ...prev, phone: e.target.value }))}
+            onChange={(e) => dispatch(setFormField({ field: 'phone', value: e.target.value }))}
           />
           <select
             required
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
             value={formData.batch_id}
-            onChange={(e) => setFormData((prev) => ({ ...prev, batch_id: e.target.value }))}
+            onChange={(e) => dispatch(setFormField({ field: 'batch_id', value: e.target.value }))}
           >
             <option value="">Select Batch</option>
-            {safeBatches.map((batch) => (
-              <option key={batch.id} value={batch.id}>{batch.name}</option>
+            {batches.map((batch) => (
+              <option key={batch.id} value={batch.id}>
+                {batch.name}
+              </option>
             ))}
           </select>
           <input
             placeholder="Parent phone"
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
             value={formData.parent_phone}
-            onChange={(e) => setFormData((prev) => ({ ...prev, parent_phone: e.target.value }))}
+            onChange={(e) => dispatch(setFormField({ field: 'parent_phone', value: e.target.value }))}
           />
         </form>
       </Modal>
@@ -363,10 +304,16 @@ function Students() {
       <Modal
         open={deleteOpen}
         title="Delete Student"
-        onClose={() => setDeleteOpen(false)}
+        onClose={() => dispatch(closeDeleteModal())}
         footer={(
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setDeleteOpen(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700">Cancel</button>
+            <button
+              type="button"
+              onClick={() => dispatch(closeDeleteModal())}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
+            >
+              Cancel
+            </button>
             <button
               type="button"
               onClick={onConfirmDelete}
@@ -378,13 +325,23 @@ function Students() {
           </div>
         )}
       >
-        <p className="text-sm text-slate-700">You are about to permanently delete this student and linked records. This action cannot be undone.</p>
+        <p className="text-sm text-slate-700">
+          You are about to permanently delete this student and linked records. This action cannot be undone.
+        </p>
         {deleteStudentRow ? (
           <div className="mt-3 rounded-lg bg-slate-50 p-3 text-sm">
-            <p><strong>Name:</strong> {deleteStudentRow.name}</p>
-            <p><strong>Batch:</strong> {deleteStudentRow.batch || deleteStudentRow.batch_id}</p>
-            <p><strong>Phone:</strong> {deleteStudentRow.phone || '-'}</p>
-            <p><strong>Parent:</strong> {deleteStudentRow.parent_phone || '-'}</p>
+            <p>
+              <strong>Name:</strong> {deleteStudentRow.name}
+            </p>
+            <p>
+              <strong>Batch:</strong> {deleteStudentRow.batch || deleteStudentRow.batch_id}
+            </p>
+            <p>
+              <strong>Phone:</strong> {deleteStudentRow.phone || '-'}
+            </p>
+            <p>
+              <strong>Parent:</strong> {deleteStudentRow.parent_phone || '-'}
+            </p>
           </div>
         ) : null}
       </Modal>

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import CalendarOverride, Role
 from app.services.auth_service import validate_session_token
+from app.services.batch_management_service import validate_strict_slot_conflict
 from app.services.teacher_calendar_service import (
     clear_teacher_calendar_cache,
     get_calendar_session_detail,
@@ -18,6 +19,8 @@ from app.services.teacher_calendar_service import (
     sync_calendar_holidays,
     validate_calendar_conflicts,
 )
+from app.services.teacher_notification_service import send_batch_rescheduled_alert
+from app.services.time_capacity_service import clear_time_capacity_cache
 
 
 router = APIRouter(prefix='/api/calendar', tags=['Teacher Calendar'])
@@ -97,9 +100,21 @@ def list_calendar(
 def create_override(
     payload: CalendarOverridePayload,
     request: Request,
-    _: dict = Depends(_require_teacher_or_admin),
+    session: dict = Depends(_require_teacher_or_admin),
     db: Session = Depends(get_db),
 ):
+    if not payload.cancelled:
+        try:
+            validate_strict_slot_conflict(
+                db,
+                batch_id=payload.batch_id,
+                target_date=payload.override_date,
+                new_start_time=payload.new_start_time,
+                new_duration_minutes=payload.new_duration_minutes,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     row = (
         db.query(CalendarOverride)
         .filter(
@@ -129,6 +144,17 @@ def create_override(
     db.commit()
     db.refresh(row)
     clear_teacher_calendar_cache()
+    clear_time_capacity_cache()
+    send_batch_rescheduled_alert(
+        db,
+        actor_teacher_id=int(session.get('user_id') or 0),
+        batch_id=row.batch_id,
+        override_date=row.override_date,
+        new_start_time=row.new_start_time,
+        new_duration_minutes=row.new_duration_minutes,
+        cancelled=bool(row.cancelled),
+        reason=row.reason or '',
+    )
     return {
         'id': row.id,
         'institute_id': row.institute_id,
@@ -147,9 +173,21 @@ def update_override(
     override_id: int,
     payload: CalendarOverridePayload,
     request: Request,
-    _: dict = Depends(_require_teacher_or_admin),
+    session: dict = Depends(_require_teacher_or_admin),
     db: Session = Depends(get_db),
 ):
+    if not payload.cancelled:
+        try:
+            validate_strict_slot_conflict(
+                db,
+                batch_id=payload.batch_id,
+                target_date=payload.override_date,
+                new_start_time=payload.new_start_time,
+                new_duration_minutes=payload.new_duration_minutes,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     row = db.query(CalendarOverride).filter(CalendarOverride.id == override_id).first()
     if not row:
         raise HTTPException(status_code=404, detail='Calendar override not found')
@@ -164,6 +202,17 @@ def update_override(
     db.commit()
     db.refresh(row)
     clear_teacher_calendar_cache()
+    clear_time_capacity_cache()
+    send_batch_rescheduled_alert(
+        db,
+        actor_teacher_id=int(session.get('user_id') or 0),
+        batch_id=row.batch_id,
+        override_date=row.override_date,
+        new_start_time=row.new_start_time,
+        new_duration_minutes=row.new_duration_minutes,
+        cancelled=bool(row.cancelled),
+        reason=row.reason or '',
+    )
     return {
         'id': row.id,
         'institute_id': row.institute_id,
@@ -190,6 +239,7 @@ def delete_override(
     db.delete(row)
     db.commit()
     clear_teacher_calendar_cache()
+    clear_time_capacity_cache()
     return {'ok': True}
 
 

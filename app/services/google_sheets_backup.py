@@ -1,15 +1,18 @@
 import json
-from datetime import date
 
 import gspread
 from google.oauth2.service_account import Credentials
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import AttendanceRecord, FeeRecord
+from app.core.time_provider import default_time_provider
+from app.models import AttendanceRecord, FeeRecord, Student
 
 
-def backup_daily_to_google_sheet(db: Session) -> bool:
+def backup_daily_to_google_sheet(db: Session, *, center_id: int) -> bool:
+    center_id = int(center_id or 0)
+    if center_id <= 0:
+        raise ValueError('center_id is required')
     if not settings.enable_sheets_backup:
         return False
     if not settings.sheet_id or not settings.google_credentials_json:
@@ -21,18 +24,28 @@ def backup_daily_to_google_sheet(db: Session) -> bool:
     gc = gspread.authorize(credentials)
     sh = gc.open_by_key(settings.sheet_id)
 
-    worksheet_name = f"backup-{date.today()}"
+    worksheet_name = f"backup-{default_time_provider.today()}"
     try:
         ws = sh.worksheet(worksheet_name)
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=worksheet_name, rows=1000, cols=10)
 
     records = []
-    attendance = db.query(AttendanceRecord).all()
+    attendance = (
+        db.query(AttendanceRecord)
+        .join(Student, Student.id == AttendanceRecord.student_id)
+        .filter(Student.center_id == center_id)
+        .all()
+    )
     for row in attendance:
         records.append(['attendance', row.student_id, str(row.attendance_date), row.status, row.comment])
 
-    fees = db.query(FeeRecord).all()
+    fees = (
+        db.query(FeeRecord)
+        .join(Student, Student.id == FeeRecord.student_id)
+        .filter(Student.center_id == center_id)
+        .all()
+    )
     for row in fees:
         records.append(['fee', row.student_id, str(row.due_date), row.amount, row.paid_amount, row.is_paid])
 

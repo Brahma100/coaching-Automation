@@ -1,12 +1,12 @@
 ﻿from __future__ import annotations
 
-from datetime import datetime
 from typing import Iterable
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.cache import cache
+from app.core.time_provider import TimeProvider, default_time_provider
 from app.models import (
     Batch,
     Chapter,
@@ -45,6 +45,7 @@ def upload_note_pdf(*, file_bytes: bytes, filename: str, mime_type: str, user_id
 def list_notes_query(
     db: Session,
     *,
+    center_id: int,
     batch_id: int | None = None,
     subject_id: int | None = None,
     topic_id: int | None = None,
@@ -52,7 +53,11 @@ def list_notes_query(
     search: str | None = None,
     role: str,
     student: Student | None = None,
+    time_provider: TimeProvider = default_time_provider,
 ):
+    center_id = int(center_id or 0)
+    if center_id <= 0:
+        raise ValueError('center_id is required')
     query = (
         db.query(Note)
         .options(
@@ -62,6 +67,7 @@ def list_notes_query(
             joinedload(Note.batches),
             joinedload(Note.tags),
         )
+        .filter(Note.center_id == center_id)
         .order_by(Note.created_at.desc(), Note.id.desc())
     )
 
@@ -83,12 +89,12 @@ def list_notes_query(
             func.lower(Note.title).like(needle) | func.lower(Note.description).like(needle)
         )
 
-    now = datetime.utcnow()
+    now = time_provider.now().replace(tzinfo=None)
     if role == 'student':
         if not student:
             query = query.filter(Note.id == -1)
         else:
-            batch_ids = get_student_batch_ids(db, student)
+            batch_ids = get_student_batch_ids(db, student, center_id=center_id)
             if batch_ids:
                 query = query.filter(Note.batches.any(Batch.id.in_(batch_ids)))
             else:
@@ -103,12 +109,14 @@ def list_notes_query(
     return query
 
 
-def get_student_batch_ids(db: Session, student: Student) -> list[int]:
+def get_student_batch_ids(db: Session, student: Student, *, center_id: int) -> list[int]:
     rows = (
         db.query(StudentBatchMap.batch_id)
+        .join(Batch, Batch.id == StudentBatchMap.batch_id)
         .filter(
             StudentBatchMap.student_id == student.id,
             StudentBatchMap.active.is_(True),
+            Batch.center_id == center_id,
         )
         .all()
     )
@@ -149,6 +157,7 @@ def serialize_note(note: Note) -> dict:
 def ensure_subject_chapter_topic(
     db: Session,
     *,
+    center_id: int,
     subject_id: int,
     chapter_id: int | None,
     topic_id: int | None,
@@ -185,7 +194,7 @@ def sync_note_batches(db: Session, note: Note, batch_ids: Iterable[int]) -> None
     if not batch_ids_set:
         raise ValueError('At least one batch must be selected')
 
-    batches = db.query(Batch).filter(Batch.id.in_(batch_ids_set)).all()
+    batches = db.query(Batch).filter(Batch.id.in_(batch_ids_set), Batch.center_id == note.center_id).all()
     found_ids = {batch.id for batch in batches}
     missing = sorted(batch_ids_set.difference(found_ids))
     if missing:
@@ -258,13 +267,16 @@ def create_download_log(
     return row
 
 
-def list_notes_analytics(db: Session, *, role: str, student: Student | None = None) -> dict:
-    query = list_notes_query(db, role=role, student=student)
+def list_notes_analytics(db: Session, *, center_id: int, role: str, student: Student | None = None) -> dict:
+    query = list_notes_query(db, center_id=center_id, role=role, student=student)
     notes = query.all()
 
     total_downloads = (
-        db.query(func.count(NoteDownloadLog.id)).scalar() if role != 'student' else db.query(func.count(NoteDownloadLog.id))
-        .filter(NoteDownloadLog.student_id == (student.id if student else -1))
+        db.query(func.count(NoteDownloadLog.id)).join(Note, Note.id == NoteDownloadLog.note_id).filter(Note.center_id == center_id).scalar()
+        if role != 'student'
+        else db.query(func.count(NoteDownloadLog.id))
+        .join(Note, Note.id == NoteDownloadLog.note_id)
+        .filter(Note.center_id == center_id, NoteDownloadLog.student_id == (student.id if student else -1))
         .scalar()
     )
 

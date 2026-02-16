@@ -1,8 +1,15 @@
 import React from 'react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
+import { useDispatch, useSelector } from 'react-redux';
 
 import { InlineSkeletonText } from '../components/Skeleton.jsx';
-import { fetchHomework } from '../services/api';
+import {
+  clearFilters,
+  loadRequested,
+  setDueFilter,
+  setSearch,
+  setSubjectFilter,
+} from '../store/slices/homeworkSlice.js';
 
 const dueColors = ['#2f7bf6', '#ef4444', '#f59e0b'];
 
@@ -11,30 +18,19 @@ function normalizeList(value) {
 }
 
 function Homework() {
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState('');
-  const [rows, setRows] = React.useState([]);
-  const [search, setSearch] = React.useState('');
-  const [dueFilter, setDueFilter] = React.useState('all');
-  const [subjectFilter, setSubjectFilter] = React.useState('all');
+  const dispatch = useDispatch();
+  const {
+    loading,
+    error,
+    rows,
+    search,
+    dueFilter,
+    subjectFilter,
+  } = useSelector((state) => state.homework || {});
 
   React.useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const payload = await fetchHomework();
-        const data = normalizeList(payload?.rows ?? payload);
-        if (mounted) setRows(data);
-      } catch (err) {
-        if (mounted) setError(err?.message || 'Failed to load homework');
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+    dispatch(loadRequested());
+  }, [dispatch]);
 
   const safeRows = normalizeList(rows);
   const today = new Date().toISOString().slice(0, 10);
@@ -71,11 +67,7 @@ function Homework() {
           <h2 className="text-[30px] font-extrabold text-slate-900">Homework</h2>
           <button
             type="button"
-            onClick={() => {
-              setSearch('');
-              setDueFilter('all');
-              setSubjectFilter('all');
-            }}
+            onClick={() => dispatch(clearFilters())}
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
           >
             Clear Filter
@@ -109,15 +101,15 @@ function Homework() {
             placeholder="Search title"
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => dispatch(setSearch(e.target.value))}
           />
-          <select value={dueFilter} onChange={(e) => setDueFilter(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <select value={dueFilter} onChange={(e) => dispatch(setDueFilter(e.target.value))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
             <option value="all">All</option>
             <option value="today">Due Today</option>
             <option value="overdue">Overdue</option>
             <option value="upcoming">Upcoming</option>
           </select>
-          <select value={subjectFilter} onChange={(e) => setSubjectFilter(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <select value={subjectFilter} onChange={(e) => dispatch(setSubjectFilter(e.target.value))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
             <option value="all">All Subjects</option>
             {subjects.map((subject) => (
               <option key={subject} value={subject}>{subject}</option>

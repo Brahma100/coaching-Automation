@@ -80,13 +80,13 @@ class StudentAutomationTests(unittest.TestCase):
             db.add(student)
             db.commit()
             with patch('app.services.comms_service.send_telegram_message', return_value=True):
-                send_daily_digest(db)
+                send_daily_digest(db, center_id=1)
             logs = db.query(CommunicationLog).filter(CommunicationLog.student_id == student.id).all()
             self.assertEqual(len(logs), 0)
             db.add(AttendanceRecord(student_id=student.id, attendance_date=date.today(), status='Present'))
             db.commit()
             with patch('app.services.comms_service.send_telegram_message', return_value=True):
-                send_daily_digest(db)
+                send_daily_digest(db, center_id=1)
             logs = db.query(CommunicationLog).filter(
                 CommunicationLog.student_id == student.id,
                 CommunicationLog.notification_type == 'student_daily_digest',
@@ -104,7 +104,7 @@ class StudentAutomationTests(unittest.TestCase):
             db.add(hw)
             db.commit()
             with patch('app.services.comms_service.send_telegram_message', return_value=True):
-                send_homework_due_tomorrow(db)
+                send_homework_due_tomorrow(db, center_id=1)
             logs = db.query(CommunicationLog).filter(
                 CommunicationLog.student_id == student.id,
                 CommunicationLog.notification_type == 'homework_due_reminder',
@@ -124,8 +124,8 @@ class StudentAutomationTests(unittest.TestCase):
                 db.add(AttendanceRecord(student_id=student.id, attendance_date=date.today() - timedelta(days=i), status='Present'))
             db.commit()
             with patch('app.services.comms_service.send_telegram_message', return_value=True):
-                send_weekly_motivation(db)
-                send_weekly_motivation(db)
+                send_weekly_motivation(db, center_id=1)
+                send_weekly_motivation(db, center_id=1)
             logs = db.query(CommunicationLog).filter(
                 CommunicationLog.student_id == student.id,
                 CommunicationLog.notification_type == 'student_motivation_weekly',

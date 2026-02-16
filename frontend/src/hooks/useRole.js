@@ -5,6 +5,7 @@ import { setGlobalToastDurationSeconds } from '../services/api';
 
 function useRole() {
   const [role, setRole] = React.useState('');
+  const [profile, setProfile] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [isAuthenticated, setIsAuthenticated] = React.useState(false);
 
@@ -16,6 +17,7 @@ function useRole() {
         const roleValue = (profile?.role || '').toLowerCase();
         if (mounted) {
           setGlobalToastDurationSeconds(profile?.ui_toast_duration_seconds ?? 5);
+          setProfile(profile || null);
           setRole(roleValue);
           setIsAuthenticated(Boolean(roleValue));
         }
@@ -23,11 +25,13 @@ function useRole() {
         try {
           await fetchStudentMe();
           if (mounted) {
+            setProfile(null);
             setRole('student');
             setIsAuthenticated(true);
           }
         } catch {
           if (mounted) {
+            setProfile(null);
             setRole('');
             setIsAuthenticated(false);
           }
@@ -45,6 +49,7 @@ function useRole() {
 
   return {
     role,
+    profile,
     loading,
     isAuthenticated,
     isAdmin: role === 'admin',

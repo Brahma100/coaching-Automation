@@ -18,6 +18,7 @@ from app.models import (
     PendingAction,
     Student,
     StudentRiskProfile,
+    TeacherBatchMap,
 )
 from app.services.dashboard_today_service import clear_today_view_cache, get_today_view
 
@@ -48,6 +49,7 @@ class TodayViewTests(unittest.TestCase):
                 ClassSession,
                 BatchSchedule,
                 Batch,
+                TeacherBatchMap,
                 StudentRiskProfile,
                 Student,
                 AuthUser,
@@ -68,12 +70,29 @@ class TodayViewTests(unittest.TestCase):
         db = self._session_factory()
         try:
             teacher = self._seed_teacher(db)
+            batch = Batch(name='Batch O', subject='Math', academic_level='', active=True, start_time='09:00')
+            db.add(batch)
+            db.commit()
+            db.refresh(batch)
+            db.add(TeacherBatchMap(teacher_id=teacher.id, batch_id=batch.id, is_primary=True))
+            session = ClassSession(
+                batch_id=batch.id,
+                subject='Math',
+                scheduled_start=datetime.utcnow() + timedelta(hours=1),
+                duration_minutes=60,
+                status='scheduled',
+                teacher_id=teacher.id,
+            )
+            db.add(session)
+            db.commit()
+            db.refresh(session)
             action = PendingAction(
                 type='review_session_summary',
                 action_type='review_session_summary',
                 teacher_id=teacher.id,
                 status='open',
                 due_at=datetime.utcnow() - timedelta(hours=3),
+                session_id=session.id,
             )
             db.add(action)
             db.commit()
@@ -86,6 +105,22 @@ class TodayViewTests(unittest.TestCase):
         db = self._session_factory()
         try:
             teacher = self._seed_teacher(db)
+            batch = Batch(name='Batch D', subject='Math', academic_level='', active=True, start_time='09:00')
+            db.add(batch)
+            db.commit()
+            db.refresh(batch)
+            db.add(TeacherBatchMap(teacher_id=teacher.id, batch_id=batch.id, is_primary=True))
+            session = ClassSession(
+                batch_id=batch.id,
+                subject='Math',
+                scheduled_start=datetime.utcnow() + timedelta(hours=2),
+                duration_minutes=60,
+                status='scheduled',
+                teacher_id=teacher.id,
+            )
+            db.add(session)
+            db.commit()
+            db.refresh(session)
             now = datetime.now()
             day_end = datetime.combine(now.date(), datetime.max.time())
             due_at = now + timedelta(minutes=10)
@@ -97,6 +132,7 @@ class TodayViewTests(unittest.TestCase):
                 teacher_id=teacher.id,
                 status='open',
                 due_at=due_at,
+                session_id=session.id,
             )
             db.add(action)
             db.commit()
@@ -113,6 +149,7 @@ class TodayViewTests(unittest.TestCase):
             db.add(batch)
             db.commit()
             db.refresh(batch)
+            db.add(TeacherBatchMap(teacher_id=teacher.id, batch_id=batch.id, is_primary=True))
             schedule = BatchSchedule(batch_id=batch.id, weekday=date.today().weekday(), start_time='09:00', duration_minutes=60)
             db.add(schedule)
             db.commit()
@@ -140,6 +177,7 @@ class TodayViewTests(unittest.TestCase):
             db.add(batch)
             db.commit()
             db.refresh(batch)
+            db.add(TeacherBatchMap(teacher_id=teacher.id, batch_id=batch.id, is_primary=True))
             student = Student(name='Alice', guardian_phone='1', telegram_chat_id='s1', batch_id=batch.id)
             db.add(student)
             db.commit()
