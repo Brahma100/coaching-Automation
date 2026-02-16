@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date
 import logging
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
@@ -10,6 +10,7 @@ from app.services.center_scope_service import get_current_center_id
 from app.services.automation_failure_service import log_automation_failure
 from app.services.post_class_pipeline import run_post_class_pipeline
 from app.services.post_class_automation_engine import run_post_class_automation
+from app.utils.time_utils import get_utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +190,7 @@ def submit_attendance(
     if session_row is not None:
         should_run_post_class = session_row.post_class_processed_at is None
         session_row.status = 'submitted'
-        session_row.actual_start = session_row.actual_start or datetime.utcnow()
+        session_row.actual_start = session_row.actual_start or get_utcnow()
         db.flush()
 
     pipeline_result = {
@@ -237,7 +238,7 @@ def submit_attendance(
             )
     if session_row is not None:
         if should_run_post_class and not post_class_error:
-            session_row.post_class_processed_at = datetime.utcnow()
+            session_row.post_class_processed_at = get_utcnow()
         if post_class_error:
             session_row.post_class_error = True
     elif should_run_post_class:
@@ -251,7 +252,7 @@ def submit_attendance(
             )
             if processed_session:
                 if processed_session.post_class_processed_at is None and not post_class_error:
-                    processed_session.post_class_processed_at = datetime.utcnow()
+                    processed_session.post_class_processed_at = get_utcnow()
                 if post_class_error:
                     processed_session.post_class_error = True
     db.commit()

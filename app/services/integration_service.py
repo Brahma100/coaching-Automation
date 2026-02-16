@@ -5,7 +5,6 @@ import hashlib
 import json
 import logging
 import secrets
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -14,6 +13,7 @@ from app.cache import cache, cache_key
 from app.config import settings
 from app.models import CenterIntegration
 from app.services.center_scope_service import get_current_center_id
+from app.utils.time_utils import get_utcnow
 
 
 logger = logging.getLogger(__name__)
@@ -167,16 +167,15 @@ def upsert_integration(
             provider=p,
             status=str(status or "connected").strip().lower(),
             config_json=_encrypt_config(config_json or {}),
-            connected_at=datetime.utcnow() if str(status or "").strip().lower() == "connected" else None,
+            connected_at=get_utcnow() if str(status or "").strip().lower() == "connected" else None,
         )
         db.add(row)
     else:
         row.status = str(status or row.status).strip().lower()
         row.config_json = _encrypt_config(config_json or _decrypt_config(row.config_json or ""))
-        row.connected_at = datetime.utcnow() if row.status == "connected" else None
-        row.updated_at = datetime.utcnow()
+        row.connected_at = get_utcnow() if row.status == "connected" else None
+        row.updated_at = get_utcnow()
     db.commit()
     db.refresh(row)
     _clear_center_integration_cache(int(center_id))
     return row
-

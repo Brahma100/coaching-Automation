@@ -25,6 +25,7 @@ from app.models import (
     TeacherCommunicationSettings,
 )
 from app.services.auth_service import _hash_password, _issue_session_token, add_allowed_user
+from app.utils.time_utils import get_utcnow
 
 ONBOARDING_STEPS = [
     'welcome',
@@ -59,7 +60,7 @@ def _normalize_phone(value: str) -> str:
 
 
 def _now_utc() -> datetime:
-    return datetime.utcnow().replace(tzinfo=None)
+    return get_utcnow().replace(tzinfo=None)
 
 
 def _slug_suggestions(name: str, city: str = '') -> list[str]:
