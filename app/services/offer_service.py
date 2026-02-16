@@ -1,7 +1,6 @@
-from datetime import date
-
 from sqlalchemy.orm import Session
 
+from app.core.time_provider import TimeProvider, default_time_provider
 from app.models import FeeRecord, Offer, OfferRedemption, ReferralCode
 
 
@@ -26,8 +25,16 @@ def _calculate_discount(amount: float, discount_type: str, discount_value: float
     return round(discount_value, 2)
 
 
-def apply_offer_to_fee(db: Session, code: str, student_id: int, fee_record_id: int, referral_code: str | None = None):
-    today = date.today()
+def apply_offer_to_fee(
+    db: Session,
+    code: str,
+    student_id: int,
+    fee_record_id: int,
+    referral_code: str | None = None,
+    *,
+    time_provider: TimeProvider = default_time_provider,
+):
+    today = time_provider.today()
     offer = db.query(Offer).filter(Offer.code == code, Offer.active.is_(True)).first()
     if not offer:
         raise ValueError('Offer not found')

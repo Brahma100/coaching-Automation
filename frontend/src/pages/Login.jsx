@@ -1,92 +1,83 @@
 import React from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { FiMoon, FiSun } from 'react-icons/fi';
+import { useDispatch, useSelector } from 'react-redux';
 
 import boyReading from '../assets/boy-reading.png';
 import useTheme from '../hooks/useTheme';
-import { googleLogin, loginPassword, requestOtp, verifyOtp } from '../services/api';
+import { fetchActivationStatus, fetchTeacherProfile } from '../services/api';
+import {
+  loginGoogleRequested,
+  loginPasswordRequested,
+  loginRequestOtpRequested,
+  loginVerifyOtpRequested,
+  setLoginField,
+  setLoginMode,
+  setLoginOtpStep,
+} from '../store/slices/authSlice.js';
 
 function Login() {
+  const dispatch = useDispatch();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { isDark, toggleTheme } = useTheme();
-  const [mode, setMode] = React.useState('otp');
-  const [otpStep, setOtpStep] = React.useState('phone');
-  const [phone, setPhone] = React.useState('');
-  const [otp, setOtp] = React.useState('');
-  const [password, setPassword] = React.useState('');
-  const [loading, setLoading] = React.useState(false);
-  const [message, setMessage] = React.useState('');
-  const [error, setError] = React.useState('');
+  const { mode, otpStep, phone, otp, password, loading, message, error } = useSelector((state) => state.auth?.login || {});
 
-  const onRequestOtp = async (event) => {
-    event.preventDefault();
-    setLoading(true);
-    setError('');
-    setMessage('');
-    try {
-      await requestOtp(phone);
-      setOtpStep('otp');
-      setMessage('OTP sent via Telegram.');
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Failed to request OTP');
-    } finally {
-      setLoading(false);
+  const goNext = React.useCallback(async (authPayload = null) => {
+    const next = searchParams.get('next') || '/dashboard';
+    let role = String(authPayload?.role || '').toLowerCase();
+    if (!role) {
+      try {
+        const profile = await fetchTeacherProfile();
+        role = String(profile?.role || '').toLowerCase();
+      } catch {
+        role = '';
+      }
     }
+    try {
+      const status = await fetchActivationStatus();
+      if (!status?.first_login_completed) {
+        navigate('/welcome', { replace: true });
+        return;
+      }
+    } catch {
+      // Keep default login navigation if activation endpoint is unavailable.
+    }
+
+    if (next && next !== '/dashboard') {
+      navigate(next, { replace: true });
+      return;
+    }
+
+    if (role === 'teacher') {
+      navigate('/brain', { replace: true });
+      return;
+    }
+    if (role === 'admin') {
+      const adminBrainEnabled = typeof window !== 'undefined' && window.localStorage.getItem('admin.start_on_brain') === '1';
+      navigate(adminBrainEnabled ? '/brain' : '/dashboard', { replace: true });
+      return;
+    }
+    navigate(next, { replace: true });
+  }, [navigate, searchParams]);
+
+  const onRequestOtp = (event) => {
+    event.preventDefault();
+    dispatch(loginRequestOtpRequested());
   };
 
-  React.useEffect(() => {
-    if (mode !== 'otp') {
-      setOtpStep('phone');
-      setOtp('');
-    }
-  }, [mode]);
-
-  const onVerifyOtp = async (event) => {
+  const onVerifyOtp = (event) => {
     event.preventDefault();
-    setLoading(true);
-    setError('');
-    setMessage('');
-    try {
-      await verifyOtp(phone, otp);
-      const next = searchParams.get('next') || '/dashboard';
-      navigate(next, { replace: true });
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'OTP verification failed');
-    } finally {
-      setLoading(false);
-    }
+    dispatch(loginVerifyOtpRequested({ onSuccess: goNext }));
   };
 
-  const onPasswordLogin = async (event) => {
+  const onPasswordLogin = (event) => {
     event.preventDefault();
-    setLoading(true);
-    setError('');
-    setMessage('');
-    try {
-      await loginPassword(phone, password);
-      const next = searchParams.get('next') || '/dashboard';
-      navigate(next, { replace: true });
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Password login failed');
-    } finally {
-      setLoading(false);
-    }
+    dispatch(loginPasswordRequested({ onSuccess: goNext }));
   };
 
-  const onGoogleLogin = async () => {
-    setLoading(true);
-    setError('');
-    setMessage('');
-    try {
-      await googleLogin('');
-      const next = searchParams.get('next') || '/dashboard';
-      navigate(next, { replace: true });
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Google login failed');
-    } finally {
-      setLoading(false);
-    }
+  const onGoogleLogin = () => {
+    dispatch(loginGoogleRequested({ onSuccess: goNext }));
   };
 
   return (
@@ -118,14 +109,14 @@ function Login() {
           <div className="mb-4 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800">
             <button
               type="button"
-              onClick={() => setMode('otp')}
+              onClick={() => dispatch(setLoginMode('otp'))}
               className={`rounded-lg px-4 py-2 text-sm font-semibold ${mode === 'otp' ? 'bg-[#2f7bf6] text-white shadow' : 'text-slate-700 dark:text-slate-200'}`}
             >
               OTP Login
             </button>
             <button
               type="button"
-              onClick={() => setMode('password')}
+              onClick={() => dispatch(setLoginMode('password'))}
               className={`rounded-lg px-4 py-2 text-sm font-semibold ${mode === 'password' ? 'bg-[#2f7bf6] text-white shadow' : 'text-slate-700 dark:text-slate-200'}`}
             >
               Password Login
@@ -147,7 +138,11 @@ function Login() {
                 type={otpStep === 'phone' ? 'tel' : 'text'}
                 autoComplete={otpStep === 'phone' ? 'username' : 'one-time-code'}
                 value={otpStep === 'phone' ? phone : otp}
-                onChange={(e) => (otpStep === 'phone' ? setPhone(e.target.value) : setOtp(e.target.value))}
+                onChange={(e) => (
+                  otpStep === 'phone'
+                    ? dispatch(setLoginField({ field: 'phone', value: e.target.value }))
+                    : dispatch(setLoginField({ field: 'otp', value: e.target.value }))
+                )}
                 placeholder={otpStep === 'phone' ? 'Enter phone number' : 'Enter OTP'}
               />
               <button
@@ -161,9 +156,7 @@ function Login() {
                 <button
                   type="button"
                   onClick={() => {
-                    setOtpStep('phone');
-                    setOtp('');
-                    setMessage('');
+                    dispatch(setLoginOtpStep('phone'));
                   }}
                   className="w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100"
                 >
@@ -180,7 +173,7 @@ function Login() {
                 type="tel"
                 autoComplete="username"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
+                onChange={(e) => dispatch(setLoginField({ field: 'phone', value: e.target.value }))}
                 placeholder="Enter phone number"
               />
               <label className="block text-sm font-semibold text-slate-700 dark:text-slate-200">Password</label>
@@ -190,7 +183,7 @@ function Login() {
                 name="password"
                 autoComplete="current-password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => dispatch(setLoginField({ field: 'password', value: e.target.value }))}
                 placeholder="Enter password"
               />
               <button
@@ -217,6 +210,9 @@ function Login() {
 
           <p className="mt-6 text-sm text-slate-600 dark:text-slate-300">
             Don&apos;t have an account? <Link to="/signup" className="font-semibold text-[#2f7bf6]">Sign Up</Link>
+          </p>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+            New institute setup? <Link to="/onboard" className="font-semibold text-emerald-600 dark:text-emerald-400">Start onboarding</Link>
           </p>
         </main>
       </div>

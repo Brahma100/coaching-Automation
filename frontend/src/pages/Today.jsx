@@ -1,5 +1,6 @@
 import React from 'react';
 import { FiCheckCircle, FiExternalLink, FiRefreshCw } from 'react-icons/fi';
+import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 
 import ActionCard from '../components/ui/ActionCard';
@@ -8,10 +9,13 @@ import ErrorState from '../components/ui/ErrorState';
 import LoadingState from '../components/ui/LoadingState';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatusBadge from '../components/ui/StatusBadge';
-import useApiData from '../hooks/useApiData';
 import useQueryParam from '../hooks/useQueryParam';
 import useRole from '../hooks/useRole';
-import { fetchTodayView, resolveInboxAction } from '../services/api';
+import {
+  loadRequested,
+  resolveActionRequested,
+  setTeacherFilter,
+} from '../store/slices/todaySlice.js';
 
 const sectionCard = 'rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900';
 const dashboardSubtitle = 'Action-first dashboard answering: \"What do I need to do today?\"';
@@ -24,18 +28,20 @@ const sectionLabels = {
 };
 
 function Today() {
+  const dispatch = useDispatch();
   const navigate = useNavigate();
   const { isAdmin, loading: roleLoading } = useRole();
   const teacherIdParam = useQueryParam('teacher_id');
-  const [data, setData] = React.useState(null);
-  const [teacherFilter, setTeacherFilter] = React.useState('');
+  const {
+    data,
+    teacherFilter,
+    loading,
+    error,
+    resolvingActionId,
+  } = useSelector((state) => state.today || {});
   const [collapsedCompleted, setCollapsedCompleted] = React.useState(true);
-
-  const fetchToday = React.useCallback((teacherId) => fetchTodayView(teacherId || undefined), []);
-  const { loading, error, setError, refetch } = useApiData('/api/dashboard/today', {
-    fetcher: fetchToday,
-    auto: false
-  });
+  const [showAllOverdue, setShowAllOverdue] = React.useState(false);
+  const [showAllDue, setShowAllDue] = React.useState(false);
 
   const lastFetchKeyRef = React.useRef('');
   React.useEffect(() => {
@@ -46,35 +52,28 @@ function Today() {
     lastFetchKeyRef.current = fetchKey;
 
     if (isAdmin && teacherIdParam) {
-      setTeacherFilter(teacherIdParam);
+      dispatch(setTeacherFilter(teacherIdParam));
     }
-    refetch(effectiveTeacherId).then(setData).catch(() => null);
-  }, [isAdmin, roleLoading, teacherIdParam, refetch]);
+    dispatch(loadRequested({ teacherId: effectiveTeacherId }));
+  }, [dispatch, isAdmin, roleLoading, teacherIdParam]);
 
   const onResolve = React.useCallback(
     async (actionId) => {
-      try {
-        await resolveInboxAction(actionId, 'Resolved from Today View');
-        const payload = await refetch(isAdmin ? teacherFilter : undefined);
-        setData(payload);
-      } catch (err) {
-        setError('Failed to resolve action.');
-      }
+      dispatch(resolveActionRequested({
+        actionId,
+        teacherId: isAdmin ? (teacherFilter || undefined) : undefined,
+      }));
     },
-    [isAdmin, refetch, setError, teacherFilter]
+    [dispatch, isAdmin, teacherFilter]
   );
 
   const handleApplyFilter = React.useCallback(() => {
-    refetch(teacherFilter)
-      .then(setData)
-      .catch(() => null);
-  }, [refetch, teacherFilter]);
+    dispatch(loadRequested({ teacherId: teacherFilter || undefined }));
+  }, [dispatch, teacherFilter]);
 
   const handleRefresh = React.useCallback(() => {
-    refetch(isAdmin ? teacherFilter : undefined)
-      .then(setData)
-      .catch(() => null);
-  }, [refetch, isAdmin, teacherFilter]);
+    dispatch(loadRequested({ teacherId: isAdmin ? (teacherFilter || undefined) : undefined }));
+  }, [dispatch, isAdmin, teacherFilter]);
 
   const handleFeesClick = React.useCallback(() => navigate('/fees'), [navigate]);
   const handleRiskClick = React.useCallback(() => navigate('/risk'), [navigate]);
@@ -85,6 +84,8 @@ function Today() {
   const todayClasses = data?.today_classes || [];
   const flags = data?.flags || { fee_due_present: [], high_risk_students: [], repeat_absentees: [] };
   const completedToday = data?.completed_today || [];
+  const overdueVisible = showAllOverdue ? overdueActions : overdueActions.slice(0, 30);
+  const dueVisible = showAllDue ? dueTodayActions : dueTodayActions.slice(0, 24);
 
   const isLoading = roleLoading || loading;
 
@@ -102,7 +103,7 @@ function Today() {
               <span className="text-slate-500">Teacher ID</span>
               <input
                 value={teacherFilter}
-                onChange={(event) => setTeacherFilter(event.target.value)}
+                onChange={(event) => dispatch(setTeacherFilter(event.target.value))}
                 className="w-24 bg-transparent text-sm text-slate-700 outline-none dark:text-slate-100"
                 placeholder="All"
               />
@@ -136,98 +137,172 @@ function Today() {
 
       {!isLoading ? (
         <>
-          <section className={`${sectionCard} border-l-4 border-l-rose-500`}>
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{sectionLabels.overdue}</h3>
-              <StatusBadge variant="overdue">{overdueActions.length} overdue</StatusBadge>
-            </div>
-            {overdueActions.length === 0 ? (
-              <EmptyState title="No overdue actions. Clear slate." />
-            ) : (
-              <div className="space-y-3">
-                {overdueActions.map((action) => (
-                  <ActionItem key={action.id} action={action} tone="overdue" onResolve={onResolve} />
-                ))}
-              </div>
-            )}
-          </section>
+          <div className="grid gap-4 md:grid-cols-4">
+            <QuickMetric title="Overdue" value={overdueActions.length} tone="overdue" />
+            <QuickMetric title="Due Today" value={dueTodayActions.length} tone="due" />
+            <QuickMetric title="Classes" value={todayClasses.length} tone="info" />
+            <QuickMetric title="Completed" value={completedToday.length} tone="done" />
+          </div>
 
-          <section className={`${sectionCard} border-l-4 border-l-amber-400`}>
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{sectionLabels.due}</h3>
-              <StatusBadge variant="due">{dueTodayActions.length} due</StatusBadge>
-            </div>
-            {dueTodayActions.length === 0 ? (
-              <EmptyState title="No actions due today." />
-            ) : (
-              <div className="space-y-3">
-                {dueTodayActions.map((action) => (
-                  <ActionItem key={action.id} action={action} tone="due" onResolve={onResolve} />
-                ))}
+          <div className="grid gap-4 xl:grid-cols-3">
+            <section className={sectionCard}>
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{sectionLabels.classes}</h3>
+                <span className="text-xs text-slate-500">{todayClasses.length} classes</span>
               </div>
-            )}
-          </section>
+              {todayClasses.length === 0 ? (
+                <EmptyState title="No classes scheduled today." />
+              ) : (
+                <div className="max-h-[34vh] space-y-3 overflow-auto pr-1">
+                  {todayClasses.map((cls) => (
+                    <ClassItem key={`${cls.batch_id}-${cls.schedule_id}`} item={cls} />
+                  ))}
+                </div>
+              )}
+            </section>
 
-          <section className={sectionCard}>
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{sectionLabels.classes}</h3>
-              <span className="text-xs text-slate-500">{todayClasses.length} classes</span>
-            </div>
-            {todayClasses.length === 0 ? (
-              <EmptyState title="No classes scheduled today." />
-            ) : (
-              <div className="space-y-3">
-                {todayClasses.map((cls) => (
-                  <ClassItem key={`${cls.batch_id}-${cls.schedule_id}`} item={cls} />
-                ))}
+            <section className={sectionCard}>
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{sectionLabels.flags}</h3>
+                <span className="text-xs text-slate-500">Silent intelligence</span>
               </div>
-            )}
-          </section>
-
-          <section className={sectionCard}>
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{sectionLabels.flags}</h3>
-              <span className="text-xs text-slate-500">Silent intelligence</span>
-            </div>
-            <div className="grid gap-4 md:grid-cols-3">
-              <FlagCard title="Fee Due (Present Today)" count={flags.fee_due_present.length} onClick={handleFeesClick} />
-              <FlagCard title="High Risk Students" count={flags.high_risk_students.length} onClick={handleRiskClick} />
-              <FlagCard title="Repeated Absentees" count={flags.repeat_absentees.length} onClick={handleAttendanceClick} />
-            </div>
-          </section>
-
-          <section className={sectionCard}>
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{sectionLabels.completed}</h3>
-              <button
-                type="button"
-                onClick={() => setCollapsedCompleted((prev) => !prev)}
-                className="text-xs font-semibold text-slate-600 dark:text-slate-300"
-              >
-                {collapsedCompleted ? 'Show' : 'Hide'}
-              </button>
-            </div>
-            {!collapsedCompleted ? (
-              <div className="mt-4 space-y-2">
-                {completedToday.length === 0 ? (
-                  <EmptyState title="Nothing resolved yet today." />
-                ) : (
-                  completedToday.map((action) => (
-                    <CompletedItem key={action.id} action={action} />
-                  ))
-                )}
+              <div className="grid gap-4">
+                <FlagCard title="Fee Due (Present Today)" count={flags.fee_due_present.length} onClick={handleFeesClick} />
+                <FlagCard title="High Risk Students" count={flags.high_risk_students.length} onClick={handleRiskClick} />
+                <FlagCard title="Repeated Absentees" count={flags.repeat_absentees.length} onClick={handleAttendanceClick} />
               </div>
-            ) : (
-              <p className="mt-3 text-xs text-slate-500">Collapsed for focus.</p>
-            )}
-          </section>
+            </section>
+
+            <section className={sectionCard}>
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{sectionLabels.completed}</h3>
+                <button
+                  type="button"
+                  onClick={() => setCollapsedCompleted((prev) => !prev)}
+                  className="text-xs font-semibold text-slate-600 dark:text-slate-300"
+                >
+                  {collapsedCompleted ? 'Show' : 'Hide'}
+                </button>
+              </div>
+              {!collapsedCompleted ? (
+                <div className="mt-4 max-h-[34vh] space-y-2 overflow-auto pr-1">
+                  {completedToday.length === 0 ? (
+                    <EmptyState title="Nothing resolved yet today." />
+                  ) : (
+                    completedToday.map((action) => (
+                      <CompletedItem key={action.id} action={action} />
+                    ))
+                  )}
+                </div>
+              ) : (
+                <p className="mt-3 text-xs text-slate-500">Collapsed for focus.</p>
+              )}
+            </section>
+          </div>
+
+          <div className="space-y-4">
+            <ActionStreamSection
+              title={sectionLabels.overdue}
+              variant="overdue"
+              count={overdueActions.length}
+              rows={overdueVisible}
+              fullCount={overdueActions.length}
+              expanded={showAllOverdue}
+              onToggleExpanded={() => setShowAllOverdue((prev) => !prev)}
+              emptyTitle="No overdue actions. Clear slate."
+              onResolve={onResolve}
+              resolvingActionId={resolvingActionId}
+            />
+
+            <ActionStreamSection
+              title={sectionLabels.due}
+              variant="due"
+              count={dueTodayActions.length}
+              rows={dueVisible}
+              fullCount={dueTodayActions.length}
+              expanded={showAllDue}
+              onToggleExpanded={() => setShowAllDue((prev) => !prev)}
+              emptyTitle="No actions due today."
+              onResolve={onResolve}
+              resolvingActionId={resolvingActionId}
+            />
+          </div>
         </>
       ) : null}
     </div>
   );
 }
 
-const ActionItem = React.memo(function ActionItem({ action, tone, onResolve }) {
+const QuickMetric = React.memo(function QuickMetric({ title, value, tone }) {
+  const toneClass = tone === 'overdue'
+    ? 'bg-rose-50 text-rose-700'
+    : tone === 'due'
+      ? 'bg-amber-50 text-amber-700'
+      : tone === 'done'
+        ? 'bg-emerald-50 text-emerald-700'
+        : 'bg-blue-50 text-blue-700';
+  return (
+    <div className={`rounded-xl border border-slate-200 p-3 ${toneClass}`}>
+      <p className="text-[11px] font-semibold uppercase tracking-wide">{title}</p>
+      <p className="mt-1 text-2xl font-extrabold">{value}</p>
+    </div>
+  );
+});
+
+const ActionStreamSection = React.memo(function ActionStreamSection({
+  title,
+  variant,
+  count,
+  rows,
+  fullCount,
+  expanded,
+  onToggleExpanded,
+  emptyTitle,
+  onResolve,
+  resolvingActionId,
+}) {
+  const borderTone = variant === 'overdue' ? 'border-l-rose-500' : 'border-l-amber-400';
+  const badgeVariant = variant === 'overdue' ? 'overdue' : 'due';
+  const hasMore = fullCount > rows.length;
+  return (
+    <section className={`${sectionCard} border-l-4 ${borderTone}`}>
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
+        <StatusBadge variant={badgeVariant}>{count}</StatusBadge>
+      </div>
+      {fullCount === 0 ? (
+        <EmptyState title={emptyTitle} />
+      ) : (
+        <>
+          <div className="max-h-[52vh] space-y-3 overflow-auto pr-1">
+            {rows.map((action) => (
+              <ActionItem
+                key={action.id}
+                action={action}
+                tone={variant}
+                onResolve={onResolve}
+                resolving={Number(resolvingActionId) === Number(action.id)}
+              />
+            ))}
+          </div>
+          {hasMore || expanded ? (
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={onToggleExpanded}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700"
+              >
+                {expanded ? 'Show Fewer' : `Show All (${fullCount})`}
+              </button>
+            </div>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+});
+
+const ActionItem = React.memo(function ActionItem({ action, tone, onResolve, resolving = false }) {
   const handleResolve = React.useCallback(() => onResolve(action.id), [onResolve, action.id]);
   const handleSummary = React.useCallback(() => {
     if (action.summary_url) {
@@ -267,9 +342,10 @@ const ActionItem = React.memo(function ActionItem({ action, tone, onResolve }) {
           <button
             type="button"
             onClick={handleResolve}
+            disabled={resolving}
             className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold text-white ${resolveTone}`}
           >
-            Resolve
+            {resolving ? 'Resolving...' : 'Resolve'}
           </button>
         </div>
       </div>

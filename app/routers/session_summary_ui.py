@@ -1,27 +1,44 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import FeeRecord, ParentStudentMap, Student, StudentRiskProfile
-from app.services.action_token_service import create_action_token, verify_token
-from app.services.inbox_automation import resolve_review_action_on_open
+from app.services.action_token_service import verify_token
 from app.services.attendance_session_service import load_attendance_session_sheet
+from app.services.auth_service import validate_session_token
 
 templates = Jinja2Templates(directory='app/ui/templates')
 router = APIRouter(prefix='/ui', tags=['Session Summary UI'])
+logger = logging.getLogger(__name__)
 
 
-def _authorize_summary(db: Session, session_id: int, token: str | None) -> dict:
+def _authorize_summary(db: Session, request: Request, session_id: int, token: str | None) -> dict:
     if not token:
         raise HTTPException(status_code=403, detail='Unauthorized')
+    session_token = request.cookies.get('auth_session')
+    if not session_token:
+        authorization = request.headers.get('authorization', '')
+        if authorization.lower().startswith('bearer '):
+            session_token = authorization[7:].strip()
+    request_user = validate_session_token(session_token)
     last_error = None
     payload = None
     for action_type in ('session_summary', 'notification_summary'):
         try:
-            payload = verify_token(db, token, expected_action_type=action_type)
+            payload = verify_token(
+                db,
+                token,
+                expected_action_type=action_type,
+                request_role=(request_user or {}).get('role'),
+                request_center_id=(request_user or {}).get('center_id'),
+                request_ip=(request.client.host if request.client else ''),
+                request_user_agent=request.headers.get('user-agent', ''),
+            )
             break
         except ValueError as exc:
             last_error = exc
@@ -32,26 +49,23 @@ def _authorize_summary(db: Session, session_id: int, token: str | None) -> dict:
     return payload
 
 
-def _action_url(token: str, path: str) -> str:
-    return f"{path}?token={token}"
-
-
 def _build_action_links(db: Session, student_id: int, parent_id: int | None, fee_record_id: int | None, pending_action_id: int | None) -> dict:
-    notify_token = create_action_token(
-        db,
-        action_type='notify-parent',
-        payload={'student_id': student_id, 'parent_id': parent_id, 'pending_action_id': pending_action_id},
-        ttl_minutes=60,
-    )['token']
-    fee_token = create_action_token(
-        db,
-        action_type='send-fee-reminder',
-        payload={'student_id': student_id, 'fee_record_id': fee_record_id, 'pending_action_id': pending_action_id},
-        ttl_minutes=60,
-    )['token']
+    # DEPRECATED: read endpoints should not mint action tokens.
     return {
-        'notify_parent_url': _action_url(notify_token, '/actions/notify-parent'),
-        'fee_reminder_url': _action_url(fee_token, '/actions/send-fee-reminder'),
+        'notify_parent_url': None,
+        'fee_reminder_url': None,
+        'needs_notify_parent_token': True,
+        'needs_fee_reminder_token': True,
+        'token_prepare_endpoint': '/api/commands/prepare-notification-side-effects',
+        'token_prepare_payload': {
+            'mode': 'session_student_actions',
+            'payload': {
+                'student_id': student_id,
+                'parent_id': parent_id,
+                'fee_record_id': fee_record_id,
+                'pending_action_id': pending_action_id,
+            },
+        },
     }
 
 
@@ -62,10 +76,20 @@ def session_summary_page(
     token: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    payload = _authorize_summary(db, session_id, token)
+    payload = _authorize_summary(db, request, session_id, token)
     teacher_id = int(payload.get('teacher_id') or 0)
+    session_action_command = None
     if teacher_id:
-        resolve_review_action_on_open(db, teacher_id=teacher_id, session_id=session_id)
+        logger.warning(
+            'read_endpoint_side_effect_removed endpoint=/ui/session/summary/%s side_effect=resolve_review_action_on_open teacher_id=%s',
+            session_id,
+            teacher_id,
+        )
+        session_action_command = {
+            'needs_command': True,
+            'endpoint': '/api/commands/ensure-session-actions',
+            'payload': {'teacher_id': teacher_id, 'session_id': session_id},
+        }
     sheet = load_attendance_session_sheet(db, session_id)
     rows = sheet['rows']
     student_ids = [row['student_id'] for row in rows]
@@ -115,6 +139,7 @@ def session_summary_page(
             'rows': enriched,
             'session_row': sheet['session'],
             'attendance_date': sheet['attendance_date'],
+            'session_action_command': session_action_command,
         },
     )
 
@@ -126,7 +151,7 @@ def class_start_page(
     token: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    _authorize_summary(db, session_id, token)
+    _authorize_summary(db, request, session_id, token)
     sheet = load_attendance_session_sheet(db, session_id)
     return templates.TemplateResponse(
         'class_start.html',

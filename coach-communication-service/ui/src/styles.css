@@ -1,0 +1,136 @@
+:root {
+  --bg: #f2eee6;
+  --panel: #fffaf3;
+  --ink: #1e1c1a;
+  --accent: #114b5f;
+  --accent-soft: #deecf3;
+  --ok: #1b7f4d;
+  --warn: #b7581f;
+  --line: #d4c8b8;
+  font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background: radial-gradient(circle at top right, #fef7ea 0%, var(--bg) 46%, #e7dfd3 100%);
+}
+
+.layout {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 280px 1fr;
+}
+
+aside {
+  border-right: 1px solid var(--line);
+  padding: 28px 16px;
+  background: linear-gradient(180deg, #faf3e6 0%, #efe5d7 100%);
+}
+
+h1 {
+  margin: 0 0 16px;
+}
+
+nav {
+  display: grid;
+  gap: 8px;
+}
+
+nav button {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 10px;
+  text-align: left;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+nav button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+main {
+  padding: 28px;
+}
+
+.grid {
+  display: grid;
+  gap: 16px;
+}
+
+.grid.two {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.grid.three {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.list {
+  gap: 12px;
+}
+
+.toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+input,
+textarea,
+button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  font: inherit;
+}
+
+button {
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+textarea {
+  min-height: 120px;
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.warn {
+  color: var(--warn);
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  aside {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+}

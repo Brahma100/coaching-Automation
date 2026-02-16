@@ -1,14 +1,24 @@
 import React from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
 
 import { InlineSkeletonText } from '../components/Skeleton.jsx';
 import {
-  fetchAttendanceManageOptions,
-  fetchAttendanceSession,
-  notifyGlobalToast,
-  openAttendanceSession,
-  submitAttendanceSession
-} from '../services/api';
+  apiErrorToastReceived,
+} from '../store/slices/appSlice.js';
+import {
+  consumeSessionNavigation,
+  consumeTokenClear,
+  hydrateFromQuery,
+  loadOptionsRequested,
+  loadSessionRequested,
+  openSessionRequested,
+  rowChanged,
+  setSelectedBatchId,
+  setSelectedDate,
+  setSelectedScheduleId,
+  submitSessionRequested,
+} from '../store/slices/attendanceSlice.js';
 
 function toToday() {
   return new Date().toISOString().slice(0, 10);
@@ -27,149 +37,150 @@ function normalizeStatus(value) {
 }
 
 function Attendance() {
+  const dispatch = useDispatch();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryBatchId = searchParams.get('batch_id') || '';
   const queryDate = searchParams.get('date') || '';
   const queryScheduleId = searchParams.get('schedule_id') || '';
-  const [loadingOptions, setLoadingOptions] = React.useState(true);
-  const [opening, setOpening] = React.useState(false);
-  const [loadingSheet, setLoadingSheet] = React.useState(false);
-  const [submitting, setSubmitting] = React.useState(false);
-  const [error, setError] = React.useState('');
-  const [success, setSuccess] = React.useState('');
-
-  const [batches, setBatches] = React.useState([]);
-  const [schedules, setSchedules] = React.useState([]);
-  const [selectedBatchId, setSelectedBatchId] = React.useState(queryBatchId || '');
-  const [selectedScheduleId, setSelectedScheduleId] = React.useState(queryScheduleId || '');
-  const [selectedDate, setSelectedDate] = React.useState(queryDate || toToday());
-
-  const [sheet, setSheet] = React.useState(null);
-  const [rows, setRows] = React.useState([]);
+  const {
+    loadingOptions,
+    opening,
+    loadingSheet,
+    submitting,
+    error,
+    success,
+    batches,
+    schedules,
+    selectedBatchId,
+    selectedScheduleId,
+    selectedDate,
+    sheet,
+    rows,
+    sessionNavigationId,
+    shouldClearToken,
+  } = useSelector((state) => state.attendance || {});
 
   const sessionId = searchParams.get('session_id') || '';
   const token = searchParams.get('token') || '';
   const isFutureSelectedDate = Boolean(selectedDate && selectedDate > toToday());
-
-  const loadOptions = React.useCallback(async (batchId = '', preferredScheduleId = '') => {
-    setLoadingOptions(true);
-    try {
-      const payload = await fetchAttendanceManageOptions(batchId);
-      const batchRows = normalizeList(payload?.batches);
-      const scheduleRows = normalizeList(payload?.schedules);
-      setBatches(batchRows);
-      const resolvedBatchId = String(payload?.selected_batch_id || batchRows[0]?.id || '');
-      setSelectedBatchId(resolvedBatchId);
-      setSchedules(scheduleRows);
-      const matchSchedule = String(preferredScheduleId || '');
-      const hasPreferredSchedule = Boolean(matchSchedule && scheduleRows.some((slot) => String(slot.id) === matchSchedule));
-      setSelectedScheduleId(hasPreferredSchedule ? matchSchedule : String(scheduleRows[0]?.id || ''));
-      setError('');
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Failed to load attendance options');
-    } finally {
-      setLoadingOptions(false);
-    }
-  }, []);
-
-  const loadSessionSheet = React.useCallback(async (id, tkn = '') => {
-    if (!id) return;
-    setLoadingSheet(true);
-    try {
-      const payload = await fetchAttendanceSession(id, tkn);
-      setSheet(payload || null);
-      setRows(normalizeList(payload?.rows));
-      const sessionBatchId = String(payload?.session?.batch_id || '');
-      if (sessionBatchId) setSelectedBatchId(sessionBatchId);
-      if (payload?.attendance_date) setSelectedDate(String(payload.attendance_date));
-      setError('');
-    } catch (err) {
-      setSheet(null);
-      setRows([]);
-      setError(err?.response?.data?.detail || err?.message || 'Failed to load attendance sheet');
-    } finally {
-      setLoadingSheet(false);
-    }
-  }, []);
+  const noAvailableBatches = !loadingOptions && normalizeList(batches).length === 0;
 
   React.useEffect(() => {
-    loadOptions(queryBatchId, queryScheduleId);
-  }, [loadOptions, queryBatchId, queryScheduleId]);
+    dispatch(
+      hydrateFromQuery({
+        queryBatchId,
+        queryScheduleId,
+        queryDate,
+        today: toToday(),
+      })
+    );
+  }, [dispatch, queryBatchId, queryScheduleId, queryDate]);
+
+  React.useEffect(() => {
+    dispatch(
+      loadOptionsRequested({
+        batchId: queryBatchId,
+        preferredScheduleId: queryScheduleId,
+        attendanceDate: queryDate || selectedDate,
+      })
+    );
+  }, [dispatch, queryBatchId, queryScheduleId, queryDate, selectedDate]);
 
   React.useEffect(() => {
     if (!sessionId) return;
-    loadSessionSheet(sessionId, token);
-  }, [sessionId, token, loadSessionSheet]);
+    dispatch(loadSessionRequested({ sessionId, token }));
+  }, [dispatch, sessionId, token]);
+
+  React.useEffect(() => {
+    if (!sessionNavigationId) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('session_id', sessionNavigationId);
+    nextParams.delete('token');
+    setSearchParams(nextParams);
+    dispatch(consumeSessionNavigation());
+  }, [dispatch, searchParams, sessionNavigationId, setSearchParams]);
+
+  React.useEffect(() => {
+    if (!shouldClearToken) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('token');
+    setSearchParams(nextParams);
+    dispatch(consumeTokenClear());
+  }, [dispatch, searchParams, setSearchParams, shouldClearToken]);
+
+  const clearSessionQuery = React.useCallback(() => {
+    if (!searchParams.get('session_id') && !searchParams.get('token')) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('session_id');
+    nextParams.delete('token');
+    setSearchParams(nextParams);
+  }, [searchParams, setSearchParams]);
 
   const onBatchChange = async (nextBatchId) => {
-    setSelectedBatchId(nextBatchId);
-    await loadOptions(nextBatchId);
+    clearSessionQuery();
+    dispatch(setSelectedBatchId(nextBatchId));
+    dispatch(
+      loadOptionsRequested({
+        batchId: nextBatchId,
+        preferredScheduleId: '',
+        attendanceDate: selectedDate,
+      })
+    );
+  };
+
+  const onDateChange = async (nextDate) => {
+    clearSessionQuery();
+    dispatch(setSelectedDate(nextDate));
+    dispatch(
+      loadOptionsRequested({
+        batchId: selectedBatchId,
+        preferredScheduleId: selectedScheduleId,
+        attendanceDate: nextDate,
+      })
+    );
+  };
+
+  const onScheduleChange = (nextScheduleId) => {
+    clearSessionQuery();
+    dispatch(setSelectedScheduleId(nextScheduleId));
   };
 
   const onOpenSession = async (event) => {
     event.preventDefault();
     if (isFutureSelectedDate) {
-      notifyGlobalToast({
+      dispatch(apiErrorToastReceived({
         tone: 'info',
         message: 'Attendance sheet can only be opened for current or past dates.',
-      });
+      }));
       return;
     }
     if (!selectedBatchId) return;
-    setOpening(true);
-    setSuccess('');
-    try {
-      const payload = await openAttendanceSession({
-        batch_id: Number(selectedBatchId),
-        schedule_id: selectedScheduleId ? Number(selectedScheduleId) : null,
-        attendance_date: selectedDate
-      });
-      const nextId = String(payload?.session_id || '');
-      if (!nextId) throw new Error('Session id missing in response');
-      const nextParams = new URLSearchParams(searchParams);
-      nextParams.set('session_id', nextId);
-      nextParams.delete('token');
-      setSearchParams(nextParams);
-      await loadSessionSheet(nextId, '');
-      setSuccess('Attendance sheet opened.');
-      setError('');
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Failed to open attendance sheet');
-    } finally {
-      setOpening(false);
-    }
+    dispatch(
+      openSessionRequested({
+        selectedBatchId,
+        selectedScheduleId,
+        selectedDate,
+      })
+    );
   };
 
   const onChangeRow = (studentId, field, value) => {
-    setRows((prev) =>
-      prev.map((row) => (row.student_id === studentId ? { ...row, [field]: value } : row))
-    );
+    dispatch(rowChanged({ studentId, field, value }));
   };
 
   const onSubmit = async () => {
     if (!sessionId || !sheet?.can_edit) return;
-    setSubmitting(true);
-    setSuccess('');
-    try {
-      await submitAttendanceSession(Number(sessionId), {
-        token: token || null,
+    dispatch(
+      submitSessionRequested({
+        sessionId,
+        token,
         records: rows.map((row) => ({
           student_id: row.student_id,
           status: normalizeStatus(row.status),
-          comment: row.comment || ''
-        }))
-      });
-      await loadSessionSheet(sessionId, '');
-      const nextParams = new URLSearchParams(searchParams);
-      nextParams.delete('token');
-      setSearchParams(nextParams);
-      setSuccess('Attendance submitted. Session is now locked.');
-      setError('');
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Failed to submit attendance');
-    } finally {
-      setSubmitting(false);
-    }
+          comment: row.comment || '',
+        })),
+      })
+    );
   };
 
   return (
@@ -196,12 +207,12 @@ function Attendance() {
           <input
             type="date"
             value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
+            onChange={(e) => onDateChange(e.target.value)}
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
           />
           <select
             value={selectedScheduleId}
-            onChange={(e) => setSelectedScheduleId(e.target.value)}
+            onChange={(e) => onScheduleChange(e.target.value)}
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
           >
             {normalizeList(schedules).map((slot) => (
@@ -219,6 +230,11 @@ function Attendance() {
             {opening ? 'Opening...' : isFutureSelectedDate ? 'Unavailable for Future Date' : 'Open Attendance Sheet'}
           </button>
         </form>
+        {noAvailableBatches ? (
+          <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            No batch is scheduled on {selectedDate}. Please choose another date.
+          </p>
+        ) : null}
       </div>
 
       {error ? <p className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p> : null}

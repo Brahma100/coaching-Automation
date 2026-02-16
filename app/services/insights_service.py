@@ -1,13 +1,14 @@
-from datetime import date, timedelta
+from datetime import timedelta
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.time_provider import TimeProvider, default_time_provider
 from app.models import AttendanceRecord, FeeRecord, Student
 
 
-def generate_insights(db: Session):
-    today = date.today()
+def generate_insights(db: Session, *, time_provider: TimeProvider = default_time_provider):
+    today = time_provider.today()
     month_start = today - timedelta(days=30)
 
     attendance_rows = db.query(

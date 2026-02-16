@@ -1,8 +1,14 @@
 import React from 'react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
+import { useDispatch, useSelector } from 'react-redux';
 
 import { InlineSkeletonText } from '../components/Skeleton.jsx';
-import { fetchRisk } from '../services/api';
+import {
+  clearFilters,
+  loadRequested,
+  setLevelFilter,
+  setSearch,
+} from '../store/slices/riskSlice.js';
 
 const riskColors = {
   HIGH: '#ef4444',
@@ -16,29 +22,18 @@ function normalizeList(value) {
 }
 
 function Risk() {
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState('');
-  const [rows, setRows] = React.useState([]);
-  const [levelFilter, setLevelFilter] = React.useState('all');
-  const [search, setSearch] = React.useState('');
+  const dispatch = useDispatch();
+  const {
+    loading,
+    error,
+    rows,
+    levelFilter,
+    search,
+  } = useSelector((state) => state.risk || {});
 
   React.useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const payload = await fetchRisk();
-        const data = normalizeList(payload?.rows ?? payload);
-        if (mounted) setRows(data);
-      } catch (err) {
-        if (mounted) setError(err?.message || 'Failed to load risk insights');
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+    dispatch(loadRequested());
+  }, [dispatch]);
 
   const safeRows = normalizeList(rows);
   const riskStats = safeRows.reduce(
@@ -69,10 +64,7 @@ function Risk() {
           <h2 className="text-[30px] font-extrabold text-slate-900">Risk Monitor</h2>
           <button
             type="button"
-            onClick={() => {
-              setLevelFilter('all');
-              setSearch('');
-            }}
+            onClick={() => dispatch(clearFilters())}
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
           >
             Clear Filter
@@ -107,15 +99,15 @@ function Risk() {
             placeholder="Search student"
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => dispatch(setSearch(e.target.value))}
           />
-          <select value={levelFilter} onChange={(e) => setLevelFilter(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <select value={levelFilter} onChange={(e) => dispatch(setLevelFilter(e.target.value))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
             <option value="all">All Levels</option>
             <option value="HIGH">High</option>
             <option value="MEDIUM">Medium</option>
             <option value="LOW">Low</option>
           </select>
-          <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700" onClick={() => setRows([...safeRows])}>Refresh View</button>
+          <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700" onClick={() => dispatch(loadRequested())}>Refresh View</button>
         </div>
 
         {loading ? <InlineSkeletonText /> : null}

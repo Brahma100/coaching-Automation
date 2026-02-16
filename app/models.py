@@ -1,6 +1,6 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from enum import Enum
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, Time, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -18,6 +18,60 @@ class AllowedUserStatus(str, Enum):
     DISABLED = 'disabled'
 
 
+class Center(Base):
+    __tablename__ = 'centers'
+    __table_args__ = (
+        UniqueConstraint('slug', name='uq_centers_slug'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(180), default='default-center')
+    slug: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey('auth_users.id'), nullable=True, index=True)
+    timezone: Mapped[str] = mapped_column(String(60), default='Asia/Kolkata')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class CenterIntegration(Base):
+    __tablename__ = 'center_integrations'
+    __table_args__ = (
+        UniqueConstraint('center_id', 'provider', name='uq_center_integrations_center_provider'),
+        Index('ix_center_integrations_center_provider', 'center_id', 'provider'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), index=True)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    status: Mapped[str] = mapped_column(String(20), default='disconnected', index=True)
+    config_json: Mapped[str] = mapped_column(Text, default='')
+    connected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class OnboardingState(Base):
+    __tablename__ = 'onboarding_states'
+    __table_args__ = (
+        UniqueConstraint('center_id', name='uq_onboarding_states_center_id'),
+        UniqueConstraint('reserved_slug', name='uq_onboarding_states_reserved_slug'),
+        Index('ix_onboarding_states_status_completed', 'status', 'is_completed'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), index=True)
+    temp_slug: Mapped[str] = mapped_column(String(120), default='', index=True)
+    reserved_slug: Mapped[str] = mapped_column(String(120), index=True)
+    setup_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), default='in_progress', index=True)
+    current_step: Mapped[str] = mapped_column(String(40), default='center_setup', index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default='{}')
+    is_completed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    lock_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
 class Batch(Base):
     __tablename__ = 'batches'
 
@@ -33,12 +87,14 @@ class Batch(Base):
     is_online: Mapped[bool] = mapped_column(Boolean, default=False)
     meeting_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
     room_id: Mapped[int | None] = mapped_column(ForeignKey('rooms.id'), nullable=True, index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), default=1, index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     students: Mapped[list['Student']] = relationship('Student', back_populates='batch')
     schedules: Mapped[list['BatchSchedule']] = relationship('BatchSchedule', back_populates='batch')
     student_links: Mapped[list['StudentBatchMap']] = relationship('StudentBatchMap', back_populates='batch')
+    teacher_links: Mapped[list['TeacherBatchMap']] = relationship('TeacherBatchMap', back_populates='batch')
     class_sessions: Mapped[list['ClassSession']] = relationship('ClassSession', back_populates='batch')
     room: Mapped['Room | None'] = relationship('Room', back_populates='batches')
     program_links: Mapped[list['BatchProgram']] = relationship('BatchProgram', back_populates='batch', cascade='all, delete-orphan')
@@ -166,6 +222,7 @@ class Note(Base):
     file_size: Mapped[int] = mapped_column(Integer, default=0)
     mime_type: Mapped[str] = mapped_column(String(120), default='application/pdf')
     uploaded_by: Mapped[int] = mapped_column(Integer, index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), default=1, index=True)
     visible_to_students: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     visible_to_parents: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     release_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
@@ -349,6 +406,7 @@ class Student(Base):
     guardian_phone: Mapped[str] = mapped_column(String(20), default='')
     telegram_chat_id: Mapped[str] = mapped_column(String(40), default='')
     batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), default=1, index=True)
     enable_daily_digest: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     enable_homework_reminders: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     enable_motivation_messages: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
@@ -482,8 +540,11 @@ class ClassSession(Base):
     topic_planned: Mapped[str] = mapped_column(Text, default='')
     topic_completed: Mapped[str] = mapped_column(Text, default='')
     teacher_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), default=1, index=True)
     status: Mapped[str] = mapped_column(String(20), default='scheduled')  # scheduled|open|submitted|closed|missed (legacy: running|completed)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    post_class_processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    post_class_error: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     batch: Mapped['Batch'] = relationship('Batch', back_populates='class_sessions')
 
@@ -520,14 +581,34 @@ class StudentBatchMap(Base):
     batch: Mapped['Batch'] = relationship('Batch', back_populates='student_links')
 
 
+class TeacherBatchMap(Base):
+    __tablename__ = 'teacher_batch_map'
+    __table_args__ = (
+        UniqueConstraint('teacher_id', 'batch_id', name='uq_teacher_batch_map_teacher_batch'),
+        Index('ix_teacher_batch_map_teacher_batch', 'teacher_id', 'batch_id'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    teacher_id: Mapped[int] = mapped_column(ForeignKey('auth_users.id'), index=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), default=1, index=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    teacher: Mapped['AuthUser'] = relationship('AuthUser', back_populates='teacher_batch_links')
+    batch: Mapped['Batch'] = relationship('Batch', back_populates='teacher_links')
+
+
 class Parent(Base):
     __tablename__ = 'parents'
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), default=1, index=True)
     name: Mapped[str] = mapped_column(String(120))
     phone: Mapped[str] = mapped_column(String(20), default='')
     telegram_chat_id: Mapped[str] = mapped_column(String(40), default='')
 
+    center: Mapped['Center'] = relationship('Center')
     student_links: Mapped[list['ParentStudentMap']] = relationship('ParentStudentMap', back_populates='parent')
 
 
@@ -549,9 +630,14 @@ class ActionToken(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     token_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     action_type: Mapped[str] = mapped_column(String(40), index=True)
+    expected_role: Mapped[str] = mapped_column(String(20), default='teacher', index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), default=1, index=True)
     payload_json: Mapped[str] = mapped_column(Text, default='{}')
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     consumed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    issued_ip: Mapped[str] = mapped_column(String(64), default='')
+    issued_user_agent: Mapped[str] = mapped_column(String(512), default='')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -563,6 +649,7 @@ class RuleConfig(Base):
     absence_streak_threshold: Mapped[int] = mapped_column(Integer, default=3)
     notify_parent_on_absence: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_parent_on_fee_due: Mapped[bool] = mapped_column(Boolean, default=True)
+    enable_student_lifecycle_notifications: Mapped[bool] = mapped_column(Boolean, default=True)
     reminder_grace_period_days: Mapped[int] = mapped_column(Integer, default=0)
     quiet_hours_start: Mapped[str] = mapped_column(String(5), default='22:00')
     quiet_hours_end: Mapped[str] = mapped_column(String(5), default='06:00')
@@ -583,6 +670,7 @@ class PendingAction(Base):
     related_session_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     teacher_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     session_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), default=1, index=True)
     status: Mapped[str] = mapped_column(String(20), default='open', index=True)  # open|resolved
     note: Mapped[str] = mapped_column(Text, default='')
     due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
@@ -609,19 +697,60 @@ class AuthUser(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     phone: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     role: Mapped[str] = mapped_column(String(20), default=Role.TEACHER.value, index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), default=1, index=True)
+    first_login_completed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     last_otp: Mapped[str] = mapped_column(String(255), default='')
     otp_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255), default='')
+    telegram_chat_id: Mapped[str] = mapped_column(String(80), default='', index=True)
     google_sub: Mapped[str] = mapped_column(String(255), default='', index=True)
     notification_delete_minutes: Mapped[int] = mapped_column(Integer, default=15)
     enable_auto_delete_notes_on_expiry: Mapped[bool] = mapped_column(Boolean, default=False)
     ui_toast_duration_seconds: Mapped[int] = mapped_column(Integer, default=5)
     time_zone: Mapped[str] = mapped_column(String(60), default='UTC')
+    timezone: Mapped[str] = mapped_column(String(60), default='Asia/Kolkata')
+    daily_work_start_time: Mapped[time] = mapped_column(Time, default=time(hour=7, minute=0))
+    daily_work_end_time: Mapped[time] = mapped_column(Time, default=time(hour=20, minute=0))
+    max_daily_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
     calendar_preferences: Mapped[str] = mapped_column(Text, default='{}')
     calendar_view_preference: Mapped[str] = mapped_column(String(20), default='week')
     calendar_snap_minutes: Mapped[int] = mapped_column(Integer, default=15)
     enable_live_mode_auto_open: Mapped[bool] = mapped_column(Boolean, default=True)
     default_event_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    teacher_batch_links: Mapped[list['TeacherBatchMap']] = relationship('TeacherBatchMap', back_populates='teacher')
+
+
+class TeacherCommunicationSettings(Base):
+    __tablename__ = 'teacher_communication_settings'
+    __table_args__ = (
+        UniqueConstraint('teacher_id', name='uq_teacher_communication_settings_teacher'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    teacher_id: Mapped[int] = mapped_column(ForeignKey('auth_users.id'), index=True)
+    provider: Mapped[str] = mapped_column(String(20), default='telegram')
+    provider_config_json: Mapped[str] = mapped_column(Text, default='')
+    enabled_events: Mapped[str] = mapped_column(Text, default='[]')
+    quiet_hours: Mapped[str] = mapped_column(Text, default='{"start":"22:00","end":"06:00"}')
+    delete_timer_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TeacherAutomationRule(Base):
+    __tablename__ = 'teacher_automation_rules'
+    __table_args__ = (
+        UniqueConstraint('teacher_id', name='uq_teacher_automation_rules_teacher'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    teacher_id: Mapped[int] = mapped_column(ForeignKey('auth_users.id'), index=True)
+    notify_on_attendance: Mapped[bool] = mapped_column(Boolean, default=True)
+    class_start_reminder: Mapped[bool] = mapped_column(Boolean, default=True)
+    fee_due_alerts: Mapped[bool] = mapped_column(Boolean, default=True)
+    student_absence_escalation: Mapped[bool] = mapped_column(Boolean, default=True)
+    homework_reminders: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class DriveOAuthToken(Base):
@@ -675,7 +804,58 @@ class CommunicationLog(Base):
     notification_type: Mapped[str] = mapped_column(String(40), default='', index=True)
     event_type: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     reference_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    delivery_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    delivery_status: Mapped[str] = mapped_column(String(30), default='pending', index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AutomationFailureLog(Base):
+    __tablename__ = 'automation_failure_logs'
+    __table_args__ = (
+        Index('ix_automation_failure_logs_center_job_created', 'center_id', 'job_name', 'created_at'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), default=1, index=True)
+    job_name: Mapped[str] = mapped_column(String(80), index=True)
+    entity_type: Mapped[str] = mapped_column(String(50), default='', index=True)
+    entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    error_message: Mapped[str] = mapped_column(Text, default='')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ProviderCircuitState(Base):
+    __tablename__ = 'provider_circuit_states'
+    __table_args__ = (
+        UniqueConstraint('center_id', 'provider_name', name='uq_provider_circuit_center_provider'),
+        Index('ix_provider_circuit_center_provider', 'center_id', 'provider_name'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), default=1, index=True)
+    provider_name: Mapped[str] = mapped_column(String(30), default='telegram', index=True)
+    state: Mapped[str] = mapped_column(String(20), default='closed', index=True)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    success_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_state_change_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class RateLimitState(Base):
+    __tablename__ = 'rate_limit_states'
+    __table_args__ = (
+        UniqueConstraint('center_id', 'scope_type', 'scope_key', 'action_name', name='uq_rate_limit_scope_action'),
+        Index('ix_rate_limit_scope_action', 'center_id', 'scope_type', 'scope_key', 'action_name'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), default=1, index=True)
+    scope_type: Mapped[str] = mapped_column(String(20), default='user', index=True)
+    scope_key: Mapped[str] = mapped_column(String(120), default='', index=True)
+    action_name: Mapped[str] = mapped_column(String(80), default='', index=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class StudentRiskProfile(Base):
@@ -719,6 +899,7 @@ class TeacherTodaySnapshot(Base):
 class AdminOpsSnapshot(Base):
     __tablename__ = 'admin_ops_snapshot'
 
+    center_id: Mapped[int] = mapped_column(ForeignKey('centers.id'), default=1, primary_key=True, index=True)
     date: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
     data_json: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
@@ -785,3 +966,19 @@ class CalendarHoliday(Base):
     is_national: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class TeacherUnavailability(Base):
+    __tablename__ = 'teacher_unavailability'
+    __table_args__ = (
+        Index('ix_teacher_unavailability_teacher_date', 'teacher_id', 'date'),
+        Index('ix_teacher_unavailability_teacher_date_start', 'teacher_id', 'date', 'start_time'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    teacher_id: Mapped[int] = mapped_column(Integer, index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    start_time: Mapped[time] = mapped_column(Time)
+    end_time: Mapped[time] = mapped_column(Time)
+    reason: Mapped[str] = mapped_column(String(255), default='')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

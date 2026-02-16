@@ -1,24 +1,27 @@
-﻿import React from 'react';
+import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { FiCalendar, FiCheckCircle, FiClock, FiDownload, FiEdit2, FiFileText, FiGrid, FiInfo, FiLink, FiList, FiSearch, FiTrash2, FiUpload, FiX } from 'react-icons/fi';
+import { useDispatch, useSelector } from 'react-redux';
 
 import SkeletonBlock from '../components/Skeleton.jsx';
 import Accordion from '../components/ui/Accordion.jsx';
 import ConfirmModal from '../components/ui/ConfirmModal.jsx';
 import Toast from '../components/ui/Toast.jsx';
-import {
-  deleteNote,
-  disconnectDrive,
-  downloadNote,
-  fetchDriveStatus,
-  fetchTeacherProfile,
-  fetchNotes,
-  fetchNotesAnalytics,
-  fetchNotesMetadata,
-  updateNote,
-  uploadNote
-} from '../services/api';
 import useRole from '../hooks/useRole';
+import {
+  autoDeleteRequested,
+  clearError as clearNotesError,
+  deleteRequested,
+  disconnectDriveRequested,
+  downloadRequested,
+  loadRequested,
+  loadAutoDeletePrefRequested,
+  loadDriveStatusRequested,
+  setError as setNotesError,
+  setViewMode,
+  uploadRequested,
+  updateFilter as updateNotesFilter,
+} from '../store/slices/notesSlice.js';
 
 function bytesToDisplay(bytes) {
   const value = Number(bytes || 0);
@@ -77,15 +80,25 @@ function ModernProgress({ value = 0, indeterminate = false, tone = 'blue' }) {
 }
 
 function Notes() {
+  const dispatch = useDispatch();
   const { isTeacher, isAdmin } = useRole();
   const canUpload = isTeacher || isAdmin;
 
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState('');
-  const [notes, setNotes] = React.useState([]);
-  const [metadata, setMetadata] = React.useState({ subjects: [], chapters: [], topics: [], tags: [], batches: [] });
-  const [analytics, setAnalytics] = React.useState({ total_notes: 0, total_subjects: 0, total_tags: 0, total_downloads: 0 });
-  const [viewMode, setViewMode] = React.useState('grid');
+  const {
+    loading,
+    error,
+    notes = [],
+    metadata = { subjects: [], chapters: [], topics: [], tags: [], batches: [] },
+    analytics = { total_notes: 0, total_subjects: 0, total_tags: 0, total_downloads: 0 },
+    pagination = { page: 1, page_size: 12, total: 0, total_pages: 1 },
+    filters = { search: '', batch_id: '', subject_id: '', topic_id: '', tag: '', page: 1, page_size: 12 },
+    viewMode = 'grid',
+    autoDeleteOnExpiryEnabled = false,
+    driveConnected = false,
+    driveStatusLoading = false,
+    driveDisconnecting = false,
+    deletingId = null,
+  } = useSelector((state) => state.notes || {});
   const [showUpload, setShowUpload] = React.useState(false);
   const [editingNoteId, setEditingNoteId] = React.useState(null);
   const [uploading, setUploading] = React.useState(false);
@@ -93,26 +106,13 @@ function Notes() {
   const [downloadingId, setDownloadingId] = React.useState(null);
   const [downloadState, setDownloadState] = React.useState({});
   const [deleteTarget, setDeleteTarget] = React.useState(null);
-  const [deletingId, setDeletingId] = React.useState(null);
   const [toast, setToast] = React.useState({ open: false, tone: 'info', message: '' });
-  const [autoDeleteOnExpiryEnabled, setAutoDeleteOnExpiryEnabled] = React.useState(false);
-  const [driveConnected, setDriveConnected] = React.useState(false);
-  const [driveStatusLoading, setDriveStatusLoading] = React.useState(false);
-  const [driveDisconnecting, setDriveDisconnecting] = React.useState(false);
   const [expiryTick, setExpiryTick] = React.useState(Date.now());
   const autoDeleteInFlightRef = React.useRef(false);
   const autoDeleteHandledRef = React.useRef(new Set());
-  const [pagination, setPagination] = React.useState({ page: 1, page_size: 12, total: 0, total_pages: 1 });
-
-  const [filters, setFilters] = React.useState({
-    search: '',
-    batch_id: '',
-    subject_id: '',
-    topic_id: '',
-    tag: '',
-    page: 1,
-    page_size: 12
-  });
+  const setError = React.useCallback((message) => {
+    dispatch(setNotesError(message || ''));
+  }, [dispatch]);
 
   const [form, setForm] = React.useState({
     title: '',
@@ -173,98 +173,34 @@ function Notes() {
     return Math.max(analyticsCount, metadataCount, notesCount);
   }, [analytics.total_tags, metadata.tags, notes]);
 
-  const loadAll = React.useCallback(async () => {
-    setError('');
-    try {
-      const [notePayload, metaPayload, analyticsPayload] = await Promise.all([
-        fetchNotes(filters),
-        fetchNotesMetadata(),
-        fetchNotesAnalytics()
-      ]);
-      setNotes(notePayload?.items || []);
-      setPagination(notePayload?.pagination || { page: 1, page_size: 12, total: 0, total_pages: 1 });
-      setMetadata(metaPayload || { subjects: [], chapters: [], topics: [], tags: [], batches: [] });
-      setAnalytics(analyticsPayload || { total_notes: 0, total_subjects: 0, total_tags: 0, total_downloads: 0 });
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Failed to load notes');
-    } finally {
-      setLoading(false);
-    }
-  }, [filters]);
+  const loadAll = React.useCallback(() => {
+    dispatch(loadRequested({ filters }));
+  }, [dispatch, filters]);
 
   React.useEffect(() => {
-    let mounted = true;
-    (async () => {
-      if (!mounted) return;
-      await loadAll();
-    })();
-    return () => {
-      mounted = false;
-    };
+    loadAll();
   }, [loadAll]);
 
   React.useEffect(() => {
-    let mounted = true;
     if (!canUpload) {
-      setAutoDeleteOnExpiryEnabled(false);
-      return () => {
-        mounted = false;
-      };
+      return;
     }
-    (async () => {
-      try {
-        const profile = await fetchTeacherProfile();
-        if (!mounted) return;
-        setAutoDeleteOnExpiryEnabled(Boolean(profile?.enable_auto_delete_notes_on_expiry));
-      } catch {
-        if (!mounted) return;
-        setAutoDeleteOnExpiryEnabled(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [canUpload]);
+    dispatch(loadAutoDeletePrefRequested());
+  }, [canUpload, dispatch]);
 
   React.useEffect(() => {
-    let mounted = true;
     if (!isAdmin) {
-      setDriveConnected(false);
-      return () => {
-        mounted = false;
-      };
+      return;
     }
-    (async () => {
-      setDriveStatusLoading(true);
-      try {
-        const status = await fetchDriveStatus();
-        if (!mounted) return;
-        setDriveConnected(Boolean(status?.connected));
-      } catch {
-        if (!mounted) return;
-        setDriveConnected(false);
-      } finally {
-        if (mounted) setDriveStatusLoading(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [isAdmin]);
+    dispatch(loadDriveStatusRequested());
+  }, [dispatch, isAdmin]);
 
   React.useEffect(() => {
     if (!isAdmin) return undefined;
-    const refreshOnFocus = async () => {
-      try {
-        const status = await fetchDriveStatus();
-        setDriveConnected(Boolean(status?.connected));
-      } catch {
-        setDriveConnected(false);
-      }
-    };
+    const refreshOnFocus = () => dispatch(loadDriveStatusRequested());
     window.addEventListener('focus', refreshOnFocus);
     return () => window.removeEventListener('focus', refreshOnFocus);
-  }, [isAdmin]);
+  }, [dispatch, isAdmin]);
 
   React.useEffect(() => {
     if (!canUpload || !autoDeleteOnExpiryEnabled) return undefined;
@@ -288,38 +224,30 @@ function Notes() {
     autoDeleteInFlightRef.current = true;
     expiredIds.forEach((id) => autoDeleteHandledRef.current.add(id));
 
-    (async () => {
-      const results = await Promise.allSettled(expiredIds.map((id) => deleteNote(id)));
-      const successCount = results.filter((row) => row.status === 'fulfilled').length;
-      const failedCount = results.length - successCount;
-
-      if (successCount > 0) {
-        setToast({
-          open: true,
-          tone: 'info',
-          message: `${successCount} expired note${successCount > 1 ? 's were' : ' was'} auto-deleted.`,
-        });
-        await loadAll();
-      }
-
-      if (failedCount > 0) {
-        setToast({
-          open: true,
-          tone: 'error',
-          message: `${failedCount} expired note${failedCount > 1 ? 's' : ''} could not be auto-deleted.`,
-        });
-      }
-    })().finally(() => {
-      autoDeleteInFlightRef.current = false;
-    });
-  }, [autoDeleteOnExpiryEnabled, canUpload, expiryTick, loadAll, loading, notes]);
+    dispatch(autoDeleteRequested({
+      noteIds: expiredIds,
+      onDone: ({ successCount, failedCount }) => {
+        if (successCount > 0) {
+          setToast({
+            open: true,
+            tone: 'info',
+            message: `${successCount} expired note${successCount > 1 ? 's were' : ' was'} auto-deleted.`,
+          });
+        }
+        if (failedCount > 0) {
+          setToast({
+            open: true,
+            tone: 'error',
+            message: `${failedCount} expired note${failedCount > 1 ? 's' : ''} could not be auto-deleted.`,
+          });
+        }
+        autoDeleteInFlightRef.current = false;
+      },
+    }));
+  }, [autoDeleteOnExpiryEnabled, canUpload, dispatch, expiryTick, loading, notes]);
 
   const updateFilter = (key, value) => {
-    setFilters((prev) => ({
-      ...prev,
-      [key]: value,
-      page: key === 'page' ? value : 1
-    }));
+    dispatch(updateNotesFilter({ key, value }));
   };
 
   const toggleBatch = (batchId) => {
@@ -365,7 +293,7 @@ function Notes() {
   };
 
   const openUploadModal = () => {
-    setError('');
+    dispatch(clearNotesError());
     setEditingNoteId(null);
     resetForm();
     setShowUpload(true);
@@ -379,7 +307,7 @@ function Notes() {
   };
 
   const openEditModal = (note) => {
-    setError('');
+    dispatch(clearNotesError());
     setEditingNoteId(note.id);
     setForm({
       title: note.title || '',
@@ -449,12 +377,17 @@ function Notes() {
           phase: bounded >= 99 ? 'processing' : 'uploading'
         });
       };
-      const result = isEditing
-        ? await updateNote(editingNoteId, payload, applyProgress)
-        : await uploadNote(payload, applyProgress);
+      const result = await new Promise((resolve, reject) => {
+        dispatch(uploadRequested({
+          editingNoteId: isEditing ? editingNoteId : null,
+          formData: payload,
+          onProgress: applyProgress,
+          onSuccess: resolve,
+          onError: reject,
+        }));
+      });
       setUploadState({ progress: 100, phase: 'done' });
       await new Promise((resolve) => setTimeout(resolve, 260));
-      await loadAll();
       setShowUpload(false);
       setEditingNoteId(null);
       resetForm();
@@ -464,7 +397,7 @@ function Notes() {
         message: result?.warning || (isEditing ? 'Note updated successfully' : 'Note uploaded successfully')
       });
     } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || (isEditing ? 'Update failed' : 'Upload failed'));
+      setError(String(err || (isEditing ? 'Update failed' : 'Upload failed')));
       setUploadState((prev) => ({ ...prev, phase: 'error' }));
     } finally {
       setUploading(false);
@@ -476,20 +409,26 @@ function Notes() {
     setDownloadingId(noteId);
     setDownloadState((prev) => ({ ...prev, [noteId]: { progress: 0, phase: 'downloading' } }));
     try {
-      await downloadNote(noteId, (value) => {
-        const bounded = Math.max(0, Math.min(100, Number(value) || 0));
-        setDownloadState((prev) => ({
-          ...prev,
-          [noteId]: {
-            progress: bounded >= 99 ? 99 : bounded,
-            phase: bounded >= 99 ? 'processing' : 'downloading'
-          }
+      await new Promise((resolve, reject) => {
+        dispatch(downloadRequested({
+          noteId,
+          onProgress: (value) => {
+            const bounded = Math.max(0, Math.min(100, Number(value) || 0));
+            setDownloadState((prev) => ({
+              ...prev,
+              [noteId]: {
+                progress: bounded >= 99 ? 99 : bounded,
+                phase: bounded >= 99 ? 'processing' : 'downloading'
+              }
+            }));
+          },
+          onSuccess: resolve,
+          onError: reject,
         }));
       });
       setDownloadState((prev) => ({ ...prev, [noteId]: { progress: 100, phase: 'done' } }));
-      await loadAll();
     } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Download failed');
+      setError(String(err || 'Download failed'));
       setDownloadState((prev) => ({ ...prev, [noteId]: { progress: 0, phase: 'error' } }));
     } finally {
       setDownloadingId(null);
@@ -514,19 +453,21 @@ function Notes() {
 
   const confirmDelete = async () => {
     if (!deleteTarget?.id) return;
-    setDeletingId(deleteTarget.id);
-    setError('');
+    dispatch(clearNotesError());
     try {
-      await deleteNote(deleteTarget.id);
+      await new Promise((resolve, reject) => {
+        dispatch(deleteRequested({
+          noteId: deleteTarget.id,
+          onSuccess: resolve,
+          onError: reject,
+        }));
+      });
       setToast({ open: true, tone: 'success', message: 'Note deleted successfully' });
       setDeleteTarget(null);
-      await loadAll();
     } catch (err) {
-      const message = err?.response?.data?.detail || err?.message || 'Delete failed';
+      const message = String(err || 'Delete failed');
       setError(message);
       setToast({ open: true, tone: 'error', message });
-    } finally {
-      setDeletingId(null);
     }
   };
 
@@ -534,16 +475,17 @@ function Notes() {
     if (!isAdmin || driveDisconnecting) return;
     const confirmed = window.confirm('Disconnect Google Drive? Upload/download via Drive will stop until reconnect.');
     if (!confirmed) return;
-    setDriveDisconnecting(true);
     try {
-      await disconnectDrive();
-      setDriveConnected(false);
+      await new Promise((resolve, reject) => {
+        dispatch(disconnectDriveRequested({
+          onSuccess: resolve,
+          onError: reject,
+        }));
+      });
       setToast({ open: true, tone: 'info', message: 'Google Drive disconnected' });
     } catch (err) {
-      const message = err?.response?.data?.detail || err?.message || 'Could not disconnect Drive';
+      const message = String(err || 'Could not disconnect Drive');
       setToast({ open: true, tone: 'error', message });
-    } finally {
-      setDriveDisconnecting(false);
     }
   };
 
@@ -568,7 +510,7 @@ function Notes() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setViewMode('grid')}
+              onClick={() => dispatch(setViewMode('grid'))}
               title="Grid view"
               aria-label="Grid view"
               className={`rounded-lg border px-3 py-2 text-sm font-semibold ${viewMode === 'grid' ? 'border-[#2f7bf6] bg-[#e6f0ff] text-[#2f7bf6]' : 'border-slate-300 text-slate-700'}`}
@@ -578,7 +520,7 @@ function Notes() {
             </button>
             <button
               type="button"
-              onClick={() => setViewMode('list')}
+              onClick={() => dispatch(setViewMode('list'))}
               title="List view"
               aria-label="List view"
               className={`rounded-lg border px-3 py-2 text-sm font-semibold ${viewMode === 'list' ? 'border-[#2f7bf6] bg-[#e6f0ff] text-[#2f7bf6]' : 'border-slate-300 text-slate-700'}`}

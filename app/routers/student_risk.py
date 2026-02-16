@@ -21,20 +21,20 @@ def _require_teacher(request: Request):
 def risk_students(
     request: Request,
     batch_id: int | None = Query(default=None),
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
-    return list_student_risk_profiles(db, batch_id=batch_id)
+    return list_student_risk_profiles(db, center_id=int(session.get('center_id') or 0), batch_id=batch_id)
 
 
 @router.get('/student/{student_id}')
 def risk_student_detail(
     student_id: int,
     request: Request,
-    _: dict = Depends(_require_teacher),
+    session: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
-    data = get_student_risk_detail(db, student_id)
+    data = get_student_risk_detail(db, student_id, center_id=int(session.get('center_id') or 0))
     if not data:
         raise HTTPException(status_code=404, detail='Student not found')
     return data

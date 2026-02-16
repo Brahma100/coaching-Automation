@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import json
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime
 from urllib.parse import urlencode
 
 import httpx
@@ -14,6 +14,7 @@ from google.oauth2.credentials import Credentials
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.time_provider import default_time_provider
 from app.models import DriveOAuthToken
 
 
@@ -68,6 +69,11 @@ def _state_decode(value: str) -> dict | None:
     return payload
 
 
+def decode_oauth_state(state: str) -> dict | None:
+    """Decode and validate the OAuth state parameter."""
+    return _state_decode(state)
+
+
 def build_oauth_start_url(admin_user_id: int) -> str:
     if not settings.google_oauth_client_id or not settings.google_oauth_redirect_uri:
         raise DriveOAuthError('Google OAuth is not configured')
@@ -76,7 +82,7 @@ def build_oauth_start_url(admin_user_id: int) -> str:
         {
             'uid': int(admin_user_id),
             'nonce': secrets.token_hex(8),
-            'ts': int(datetime.now(tz=timezone.utc).timestamp()),
+            'ts': int(default_time_provider.now().timestamp()),
         }
     )
     query = {

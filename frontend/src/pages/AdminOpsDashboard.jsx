@@ -1,5 +1,6 @@
 import React from 'react';
 import { FiAlertTriangle, FiChevronDown, FiChevronUp, FiRefreshCw } from 'react-icons/fi';
+import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 
 import ActionCard from '../components/ui/ActionCard';
@@ -8,44 +9,32 @@ import ErrorState from '../components/ui/ErrorState';
 import LoadingState from '../components/ui/LoadingState';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatusBadge from '../components/ui/StatusBadge';
-import useApiData from '../hooks/useApiData';
-import { fetchAdminOpsDashboard } from '../services/api';
+import { loadRequested, toggleSection } from '../store/slices/adminOpsSlice.js';
 
 const sectionCard =
   'rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900';
 
 function AdminOpsDashboard() {
+  const dispatch = useDispatch();
   const navigate = useNavigate();
-  const [updatedAt, setUpdatedAt] = React.useState(null);
-  const [collapsed, setCollapsed] = React.useState({
-    alerts: false,
-    teachers: false,
-    batches: false,
-    risk: false,
-    automation: false
-  });
-
-  const handleError = React.useCallback(
-    (err) => {
-      const status = err?.response?.status;
-      if (status === 401 || status === 403) {
-        navigate(`/login?next=${encodeURIComponent('/admin/ops')}`);
-      }
-    },
-    [navigate]
-  );
-
-  const { data, loading, error, refetch } = useApiData('/api/admin/ops-dashboard', {
-    fetcher: fetchAdminOpsDashboard,
-    deps: [handleError],
-    onError: handleError
-  });
+  const {
+    updatedAt,
+    collapsed,
+    data,
+    loading,
+    error,
+    errorStatus,
+  } = useSelector((state) => state.adminOps || {});
 
   React.useEffect(() => {
-    if (data) {
-      setUpdatedAt(new Date());
+    dispatch(loadRequested());
+  }, [dispatch]);
+
+  React.useEffect(() => {
+    if (errorStatus === 401 || errorStatus === 403) {
+      navigate(`/login?next=${encodeURIComponent('/admin/ops')}`);
     }
-  }, [data]);
+  }, [errorStatus, navigate]);
 
   const systemAlerts = data?.system_alerts || [];
   const teacherRows = data?.teacher_bottlenecks || [];
@@ -53,13 +42,9 @@ function AdminOpsDashboard() {
   const risk = data?.student_risk_summary || {};
   const automation = data?.automation_health?.items || [];
 
-  const toggle = React.useCallback((key) => {
-    setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
-  }, []);
-
   const handleRefresh = React.useCallback(() => {
-    refetch().catch(() => null);
-  }, [refetch]);
+    dispatch(loadRequested());
+  }, [dispatch]);
 
   const handleAlertClick = React.useCallback(
     (alert) => {
@@ -94,7 +79,7 @@ function AdminOpsDashboard() {
         />
         <div className="flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
           {updatedAt ? (
-            <span>Updated {updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            <span>Updated {new Date(updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
           ) : null}
           <button
             type="button"
@@ -121,7 +106,7 @@ function AdminOpsDashboard() {
               count={systemAlerts.length}
               color="text-rose-600"
               collapsed={collapsed.alerts}
-              onToggle={() => toggle('alerts')}
+              onToggle={() => dispatch(toggleSection('alerts'))}
             />
             {!collapsed.alerts ? (
               systemAlerts.length ? (
@@ -146,7 +131,7 @@ function AdminOpsDashboard() {
               count={teacherRows.length}
               color="text-amber-600"
               collapsed={collapsed.teachers}
-              onToggle={() => toggle('teachers')}
+              onToggle={() => dispatch(toggleSection('teachers'))}
             />
             {!collapsed.teachers ? (
               teacherRows.length ? (
@@ -184,7 +169,7 @@ function AdminOpsDashboard() {
               count={batchRows.length}
               color="text-slate-600"
               collapsed={collapsed.batches}
-              onToggle={() => toggle('batches')}
+              onToggle={() => dispatch(toggleSection('batches'))}
             />
             {!collapsed.batches ? (
               batchRows.length ? (
@@ -205,7 +190,7 @@ function AdminOpsDashboard() {
               count={risk.high_risk_students || 0}
               color="text-slate-600"
               collapsed={collapsed.risk}
-              onToggle={() => toggle('risk')}
+              onToggle={() => dispatch(toggleSection('risk'))}
             />
             {!collapsed.risk ? (
               <div className="grid gap-3 md:grid-cols-3">
@@ -226,7 +211,7 @@ function AdminOpsDashboard() {
               count={automation.length}
               color="text-slate-600"
               collapsed={collapsed.automation}
-              onToggle={() => toggle('automation')}
+              onToggle={() => dispatch(toggleSection('automation'))}
             />
             {!collapsed.automation ? (
               automation.length ? (

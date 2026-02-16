@@ -11,3 +11,4 @@ gspread==6.1.4
 google-auth==2.36.0
 alembic==1.14.1
 holidays==0.64
+freezegun==1.5.1

@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.time_provider import TimeProvider, default_time_provider
 from app.models import (
     AdminOpsSnapshot,
     ClassSession,
@@ -19,13 +20,14 @@ from app.services.admin_ops_dashboard_service import get_admin_ops_dashboard
 from app.services.dashboard_today_service import get_today_view
 from app.services.student_portal_service import get_student_dashboard
 from app.metrics import timed_snapshot
+from app.services.center_scope_service import get_current_center_id
 
 
 logger = logging.getLogger(__name__)
 
 
 def _utc_today() -> date:
-    return datetime.utcnow().date()
+    return default_time_provider.today()
 
 
 def _json_dumps(payload: Any) -> str:
@@ -51,7 +53,14 @@ def get_teacher_today_snapshot(db: Session, *, teacher_id: int, day: date) -> di
         return None
 
 
-def upsert_teacher_today_snapshot(db: Session, *, teacher_id: int, day: date, payload: dict) -> None:
+def upsert_teacher_today_snapshot(
+    db: Session,
+    *,
+    teacher_id: int,
+    day: date,
+    payload: dict,
+    time_provider: TimeProvider = default_time_provider,
+) -> None:
     row = (
         db.query(TeacherTodaySnapshot)
         .filter(TeacherTodaySnapshot.teacher_id == teacher_id, TeacherTodaySnapshot.date == day)
@@ -59,21 +68,26 @@ def upsert_teacher_today_snapshot(db: Session, *, teacher_id: int, day: date, pa
     )
     if row:
         row.data_json = _json_dumps(payload)
-        row.updated_at = datetime.utcnow()
+        row.updated_at = time_provider.now().replace(tzinfo=None)
     else:
         db.add(
             TeacherTodaySnapshot(
                 teacher_id=teacher_id,
                 date=day,
                 data_json=_json_dumps(payload),
-                updated_at=datetime.utcnow(),
+                updated_at=time_provider.now().replace(tzinfo=None),
             )
         )
     db.commit()
 
 
-def get_admin_ops_snapshot(db: Session, *, day: date) -> dict | None:
-    row = db.query(AdminOpsSnapshot).filter(AdminOpsSnapshot.date == day).first()
+def get_admin_ops_snapshot(db: Session, *, day: date, center_id: int | None = None) -> dict | None:
+    resolved_center_id = int(center_id or get_current_center_id() or 1)
+    row = (
+        db.query(AdminOpsSnapshot)
+        .filter(AdminOpsSnapshot.center_id == resolved_center_id, AdminOpsSnapshot.date == day)
+        .first()
+    )
     if not row:
         return None
     try:
@@ -83,13 +97,32 @@ def get_admin_ops_snapshot(db: Session, *, day: date) -> dict | None:
         return None
 
 
-def upsert_admin_ops_snapshot(db: Session, *, day: date, payload: dict) -> None:
-    row = db.query(AdminOpsSnapshot).filter(AdminOpsSnapshot.date == day).first()
+def upsert_admin_ops_snapshot(
+    db: Session,
+    *,
+    day: date,
+    payload: dict,
+    center_id: int | None = None,
+    time_provider: TimeProvider = default_time_provider,
+) -> None:
+    resolved_center_id = int(center_id or get_current_center_id() or 1)
+    row = (
+        db.query(AdminOpsSnapshot)
+        .filter(AdminOpsSnapshot.center_id == resolved_center_id, AdminOpsSnapshot.date == day)
+        .first()
+    )
     if row:
         row.data_json = _json_dumps(payload)
-        row.updated_at = datetime.utcnow()
+        row.updated_at = time_provider.now().replace(tzinfo=None)
     else:
-        db.add(AdminOpsSnapshot(date=day, data_json=_json_dumps(payload), updated_at=datetime.utcnow()))
+        db.add(
+            AdminOpsSnapshot(
+                center_id=resolved_center_id,
+                date=day,
+                data_json=_json_dumps(payload),
+                updated_at=time_provider.now().replace(tzinfo=None),
+            )
+        )
     db.commit()
 
 
@@ -108,7 +141,14 @@ def get_student_dashboard_snapshot(db: Session, *, student_id: int, day: date) -
         return None
 
 
-def upsert_student_dashboard_snapshot(db: Session, *, student_id: int, day: date, payload: dict) -> None:
+def upsert_student_dashboard_snapshot(
+    db: Session,
+    *,
+    student_id: int,
+    day: date,
+    payload: dict,
+    time_provider: TimeProvider = default_time_provider,
+) -> None:
     row = (
         db.query(StudentDashboardSnapshot)
         .filter(StudentDashboardSnapshot.student_id == student_id, StudentDashboardSnapshot.date == day)
@@ -116,14 +156,14 @@ def upsert_student_dashboard_snapshot(db: Session, *, student_id: int, day: date
     )
     if row:
         row.data_json = _json_dumps(payload)
-        row.updated_at = datetime.utcnow()
+        row.updated_at = time_provider.now().replace(tzinfo=None)
     else:
         db.add(
             StudentDashboardSnapshot(
                 student_id=student_id,
                 date=day,
                 data_json=_json_dumps(payload),
-                updated_at=datetime.utcnow(),
+                updated_at=time_provider.now().replace(tzinfo=None),
             )
         )
     db.commit()
@@ -136,8 +176,18 @@ def refresh_teacher_today_snapshot(db: Session, *, teacher_id: int, day: date | 
     teacher_id = int(teacher_id or 0)
     day = day or _utc_today()
     try:
-        payload = get_today_view(db, actor={'user_id': teacher_id, 'role': 'teacher'})
-        upsert_teacher_today_snapshot(db, teacher_id=teacher_id, day=day, payload=payload)
+        payload = get_today_view(
+            db,
+            actor={'user_id': teacher_id, 'role': 'teacher'},
+            time_provider=default_time_provider,
+        )
+        upsert_teacher_today_snapshot(
+            db,
+            teacher_id=teacher_id,
+            day=day,
+            payload=payload,
+            time_provider=default_time_provider,
+        )
     except Exception:
         logger.exception('snapshot_refresh_failed teacher_today teacher_id=%s', teacher_id)
 
@@ -146,8 +196,12 @@ def refresh_teacher_today_snapshot(db: Session, *, teacher_id: int, day: date | 
 def refresh_admin_ops_snapshot(db: Session, *, day: date | None = None) -> None:
     day = day or _utc_today()
     try:
-        payload = get_admin_ops_dashboard(db)
-        upsert_admin_ops_snapshot(db, day=day, payload=payload)
+        center_id = int(get_current_center_id() or 0)
+        if center_id <= 0:
+            logger.warning('center_filter_missing service=snapshot_service query=refresh_admin_ops_snapshot')
+            return
+        payload = get_admin_ops_dashboard(db, center_id=center_id, time_provider=default_time_provider)
+        upsert_admin_ops_snapshot(db, day=day, payload=payload, center_id=center_id, time_provider=default_time_provider)
     except Exception:
         logger.exception('snapshot_refresh_failed admin_ops')
 
@@ -162,8 +216,14 @@ def refresh_student_dashboard_snapshot(db: Session, *, student_id: int, day: dat
         student = db.query(Student).filter(Student.id == student_id).first()
         if not student:
             return
-        payload = get_student_dashboard(db, student)
-        upsert_student_dashboard_snapshot(db, student_id=student_id, day=day, payload=payload)
+        payload = get_student_dashboard(db, student, time_provider=default_time_provider)
+        upsert_student_dashboard_snapshot(
+            db,
+            student_id=student_id,
+            day=day,
+            payload=payload,
+            time_provider=default_time_provider,
+        )
     except Exception:
         logger.exception('snapshot_refresh_failed student_dashboard student_id=%s', student_id)
 

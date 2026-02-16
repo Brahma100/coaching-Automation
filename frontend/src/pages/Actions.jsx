@@ -1,61 +1,64 @@
 import React from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { Link } from 'react-router-dom';
 
 import ActionCard from '../components/ui/ActionCard';
 import EmptyState from '../components/ui/EmptyState';
 import ErrorState from '../components/ui/ErrorState';
 import LoadingState from '../components/ui/LoadingState';
 import SectionHeader from '../components/ui/SectionHeader';
-import useApiData from '../hooks/useApiData';
-import { fetchActions, ignoreRiskAction, notifyRiskParent, resolveAction, reviewRiskAction } from '../services/api';
+import {
+  clearFilters,
+  loadRequested,
+  runActionRequested,
+  setSearch,
+  setTypeFilter,
+} from '../store/slices/actionsSlice.js';
 
 function normalizeList(value) {
   return Array.isArray(value) ? value : [];
 }
 
 function Actions() {
-  const [busyId, setBusyId] = React.useState(null);
-  const [typeFilter, setTypeFilter] = React.useState('all');
-  const [search, setSearch] = React.useState('');
+  const dispatch = useDispatch();
+  const {
+    rows,
+    loading,
+    error,
+    integrationRequired,
+    integrationProvider,
+    integrationMessage,
+    busyId,
+    typeFilter,
+    search,
+  } = useSelector((state) => state.actions || {});
 
-  const { data, loading, error, setError, refetch } = useApiData('/actions/list-open', {
-    fetcher: fetchActions,
-    deps: [],
-    transform: (payload) => normalizeList(payload?.rows ?? payload)
-  });
-
-  const rows = normalizeList(data);
+  React.useEffect(() => {
+    dispatch(loadRequested());
+  }, [dispatch]);
 
   const handleRefresh = React.useCallback(() => {
-    refetch().catch(() => null);
-  }, [refetch]);
+    dispatch(loadRequested());
+  }, [dispatch]);
 
-  const runAction = React.useCallback(
-    async (id, runner) => {
-      setBusyId(id);
-      try {
-        await runner();
-        await refetch();
-      } catch (err) {
-        setError(err?.response?.data?.detail || err?.message || 'Action failed');
-      } finally {
-        setBusyId(null);
-      }
-    },
-    [refetch, setError]
-  );
-
-  const handleResolve = React.useCallback((rowId) => runAction(`resolve-${rowId}`, () => resolveAction(rowId)), [runAction]);
-  const handleReview = React.useCallback((rowId) => runAction(`review-${rowId}`, () => reviewRiskAction(rowId)), [runAction]);
-  const handleNotify = React.useCallback((rowId) => runAction(`notify-${rowId}`, () => notifyRiskParent(rowId)), [runAction]);
+  const handleResolve = React.useCallback((rowId) => {
+    dispatch(runActionRequested({ busyId: `resolve-${rowId}`, rowId, kind: 'resolve' }));
+  }, [dispatch]);
+  const handleReview = React.useCallback((rowId) => {
+    dispatch(runActionRequested({ busyId: `review-${rowId}`, rowId, kind: 'review' }));
+  }, [dispatch]);
+  const handleNotify = React.useCallback((rowId) => {
+    dispatch(runActionRequested({ busyId: `notify-${rowId}`, rowId, kind: 'notify' }));
+  }, [dispatch]);
   const handleIgnore = React.useCallback(
-    (rowId) => runAction(`ignore-${rowId}`, () => {
+    (rowId) => {
       const note = window.prompt('Ignore note (optional):', '') || '';
-      return ignoreRiskAction(rowId, note);
-    }),
-    [runAction]
+      dispatch(runActionRequested({ busyId: `ignore-${rowId}`, rowId, kind: 'ignore', note }));
+    },
+    [dispatch]
   );
 
-  const safeRows = normalizeList(rows);
+  const safeRows = normalizeList(rows || []);
   const filtered = safeRows.filter((row) => {
     const typeMatch = typeFilter === 'all' ? true : row.type === typeFilter;
     const text = `${row.type || ''} ${row.note || ''} ${row.student_id || ''}`.toLowerCase();
@@ -91,9 +94,9 @@ function Actions() {
             placeholder="Search by type, note, student"
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => dispatch(setSearch(e.target.value))}
           />
-          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <select value={typeFilter} onChange={(e) => dispatch(setTypeFilter(e.target.value))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
             <option value="all">All Types</option>
             {uniqueTypes.map((type) => (
               <option key={type} value={type}>{type}</option>
@@ -101,10 +104,7 @@ function Actions() {
           </select>
           <button
             type="button"
-            onClick={() => {
-              setTypeFilter('all');
-              setSearch('');
-            }}
+            onClick={() => dispatch(clearFilters())}
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
           >
             Clear Filter
@@ -112,6 +112,18 @@ function Actions() {
         </div>
 
         {loading ? <LoadingState /> : null}
+        {!loading && integrationRequired ? (
+          <div className="mb-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
+            <p className="text-sm font-semibold text-amber-800">
+              {integrationMessage || `Connect ${String(integrationProvider || 'telegram')} to enable notifications`}
+            </p>
+            <div className="mt-2">
+              <Link to="/settings/integrations" className="text-sm font-semibold text-amber-900 underline">
+                Open Integrations
+              </Link>
+            </div>
+          </div>
+        ) : null}
         <ErrorState message={error} variant="inline" />
         {!loading && !error ? (
           <ul className="space-y-2">

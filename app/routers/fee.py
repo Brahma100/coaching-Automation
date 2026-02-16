@@ -5,6 +5,7 @@ from app.cache import cache
 from app.db import get_db
 from app.schemas import FeeMarkPaidRequest
 from app.services.fee_service import get_fee_dashboard, mark_fee_paid
+from app.services.operational_brain_service import clear_operational_brain_cache
 
 
 router = APIRouter(prefix='/fee', tags=['Fees'])
@@ -23,6 +24,7 @@ def mark_paid(payload: FeeMarkPaidRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     cache.invalidate_prefix('today_view')
     cache.invalidate_prefix('inbox')
-    cache.invalidate('admin_ops')
+    cache.invalidate_prefix('admin_ops')
     cache.invalidate_prefix('student_dashboard')
+    clear_operational_brain_cache()
     return result

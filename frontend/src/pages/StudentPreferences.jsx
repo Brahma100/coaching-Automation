@@ -1,58 +1,37 @@
 import React from 'react';
 import { useBlocker } from 'react-router-dom';
 import { FiBell, FiBookOpen, FiCheckCircle, FiHeart, FiInfo } from 'react-icons/fi';
+import { useDispatch, useSelector } from 'react-redux';
 
 import { InlineSkeletonText } from '../components/Skeleton.jsx';
-import useDirtyForm from '../hooks/useDirtyForm';
-import { fetchStudentPreferences, updateStudentPreferences } from '../services/api';
-
-const DEFAULT_PREFERENCES = {
-  enable_daily_digest: true,
-  enable_homework_reminders: true,
-  enable_motivation_messages: true
-};
+import {
+  clearSuccess,
+  loadRequested,
+  saveRequested,
+  togglePreference,
+} from '../store/slices/studentPreferencesSlice.js';
 
 function StudentPreferences() {
-  const [loading, setLoading] = React.useState(true);
-  const [saving, setSaving] = React.useState(false);
-  const [error, setError] = React.useState('');
-  const [success, setSuccess] = React.useState('');
-
-  const { values, setValues, isDirty, reset } = useDirtyForm(DEFAULT_PREFERENCES);
+  const dispatch = useDispatch();
+  const {
+    loading,
+    saving,
+    error,
+    success,
+    values,
+    initialValues,
+  } = useSelector((state) => state.studentPreferences || {});
+  const isDirty = JSON.stringify(values || {}) !== JSON.stringify(initialValues || {});
 
   React.useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const payload = await fetchStudentPreferences();
-        if (mounted) {
-          reset({
-            enable_daily_digest: payload?.enable_daily_digest ?? true,
-            enable_homework_reminders: payload?.enable_homework_reminders ?? true,
-            enable_motivation_messages: payload?.enable_motivation_messages ?? true
-          });
-          setError('');
-        }
-      } catch (err) {
-        if (mounted) {
-          setError(err?.response?.data?.detail || err?.message || 'Could not load preferences.');
-        }
-      } finally {
-        if (mounted) {
-          setLoading(false);
-        }
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [reset]);
+    dispatch(loadRequested());
+  }, [dispatch]);
 
   React.useEffect(() => {
     if (isDirty && success) {
-      setSuccess('');
+      dispatch(clearSuccess());
     }
-  }, [isDirty, success]);
+  }, [dispatch, isDirty, success]);
 
   React.useEffect(() => {
     if (!isDirty) return undefined;
@@ -76,28 +55,6 @@ function StudentPreferences() {
       }
     }
   }, [blocker]);
-
-  const handleToggle = (key) => {
-    setValues((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      const payload = await updateStudentPreferences(values);
-      reset({
-        enable_daily_digest: payload?.enable_daily_digest ?? values.enable_daily_digest,
-        enable_homework_reminders: payload?.enable_homework_reminders ?? values.enable_homework_reminders,
-        enable_motivation_messages: payload?.enable_motivation_messages ?? values.enable_motivation_messages
-      });
-      setSuccess('Preferences saved');
-      setError('');
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Could not save preferences.');
-    } finally {
-      setSaving(false);
-    }
-  };
 
   return (
     <main className="min-h-screen px-4 py-10 sm:px-6 lg:px-8">
@@ -142,7 +99,7 @@ function StudentPreferences() {
                 description="Get a short summary at night if there is something important."
                 icon={<FiBell className="h-5 w-5" />}
                 checked={values.enable_daily_digest}
-                onChange={() => handleToggle('enable_daily_digest')}
+                onChange={() => dispatch(togglePreference('enable_daily_digest'))}
               />
 
               <PreferenceRow
@@ -150,7 +107,7 @@ function StudentPreferences() {
                 description="Reminders when homework is assigned or due."
                 icon={<FiBookOpen className="h-5 w-5" />}
                 checked={values.enable_homework_reminders}
-                onChange={() => handleToggle('enable_homework_reminders')}
+                onChange={() => dispatch(togglePreference('enable_homework_reminders'))}
               />
 
               <PreferenceRow
@@ -158,7 +115,7 @@ function StudentPreferences() {
                 description="Occasional encouragement based on consistency."
                 icon={<FiHeart className="h-5 w-5" />}
                 checked={values.enable_motivation_messages}
-                onChange={() => handleToggle('enable_motivation_messages')}
+                onChange={() => dispatch(togglePreference('enable_motivation_messages'))}
               />
 
               <div className="rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
@@ -176,7 +133,7 @@ function StudentPreferences() {
             </div>
             <button
               type="button"
-              onClick={handleSave}
+              onClick={() => dispatch(saveRequested())}
               disabled={saving}
               className="rounded-lg bg-[#2f7bf6] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
             >

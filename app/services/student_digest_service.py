@@ -1,14 +1,24 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from app.core.time_provider import TimeProvider, default_time_provider
 from app.models import AttendanceRecord, Homework, HomeworkSubmission, Student
 
 
-def build_student_digest(db: Session, student: Student) -> str | None:
-    today = date.today()
+def build_student_digest(
+    db: Session,
+    student: Student,
+    *,
+    center_id: int,
+    time_provider: TimeProvider = default_time_provider,
+) -> str | None:
+    center_id = int(center_id or 0)
+    if center_id <= 0 or int(student.center_id or 0) != center_id:
+        return None
+    today = time_provider.today()
     attendance_rows = db.query(AttendanceRecord).filter(
         AttendanceRecord.student_id == student.id,
         AttendanceRecord.attendance_date == today,
@@ -16,8 +26,22 @@ def build_student_digest(db: Session, student: Student) -> str | None:
     attended_today = sum(1 for row in attendance_rows if row.status == 'Present')
 
     start_of_day = datetime.combine(today, datetime.min.time())
-    homework_today = db.query(Homework).filter(Homework.created_at >= start_of_day).all()
-    homework_due_tomorrow = db.query(Homework).filter(Homework.due_date == today + timedelta(days=1)).all()
+    homework_today = (
+        db.query(Homework)
+        .join(HomeworkSubmission, HomeworkSubmission.homework_id == Homework.id)
+        .join(Student, Student.id == HomeworkSubmission.student_id)
+        .filter(Homework.created_at >= start_of_day, Student.id == student.id, Student.center_id == center_id)
+        .distinct()
+        .all()
+    )
+    homework_due_tomorrow = (
+        db.query(Homework)
+        .join(HomeworkSubmission, HomeworkSubmission.homework_id == Homework.id)
+        .join(Student, Student.id == HomeworkSubmission.student_id)
+        .filter(Homework.due_date == today + timedelta(days=1), Student.id == student.id, Student.center_id == center_id)
+        .distinct()
+        .all()
+    )
     submitted_ids = {
         row.homework_id
         for row in db.query(HomeworkSubmission.homework_id)

@@ -1,96 +1,49 @@
 import React from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { FiMoon, FiSun } from 'react-icons/fi';
+import { useDispatch, useSelector } from 'react-redux';
 
 import boyReading from '../assets/boy-reading.png';
 import useTheme from '../hooks/useTheme';
-import { googleLogin, requestOtp, signupPassword, verifyOtp } from '../services/api';
+import {
+  setSignupField,
+  setSignupMode,
+  setSignupOtpStep,
+  signupGoogleRequested,
+  signupPasswordRequested,
+  signupRequestOtpRequested,
+  signupVerifyOtpRequested,
+} from '../store/slices/authSlice.js';
 
 function Signup() {
+  const dispatch = useDispatch();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { isDark, toggleTheme } = useTheme();
-  const [mode, setMode] = React.useState('otp');
-  const [otpStep, setOtpStep] = React.useState('phone');
-  const [phone, setPhone] = React.useState('');
-  const [otp, setOtp] = React.useState('');
-  const [password, setPassword] = React.useState('');
-  const [confirmPassword, setConfirmPassword] = React.useState('');
-  const [loading, setLoading] = React.useState(false);
-  const [message, setMessage] = React.useState('');
-  const [error, setError] = React.useState('');
+  const { mode, otpStep, phone, otp, password, confirmPassword, loading, message, error } = useSelector((state) => state.auth?.signup || {});
 
-  const onRequestOtp = async (event) => {
+  const goNext = React.useCallback(() => {
+    const next = searchParams.get('next') || '/dashboard';
+    navigate(next, { replace: true });
+  }, [navigate, searchParams]);
+
+  const onRequestOtp = (event) => {
     event.preventDefault();
-    setLoading(true);
-    setError('');
-    setMessage('');
-    try {
-      await requestOtp(phone);
-      setOtpStep('otp');
-      setMessage('OTP sent via Telegram.');
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Failed to request OTP');
-    } finally {
-      setLoading(false);
-    }
+    dispatch(signupRequestOtpRequested());
   };
 
-  React.useEffect(() => {
-    if (mode !== 'otp') {
-      setOtpStep('phone');
-      setOtp('');
-    }
-  }, [mode]);
-
-  const onVerifyOtpSignup = async (event) => {
+  const onVerifyOtpSignup = (event) => {
     event.preventDefault();
-    setLoading(true);
-    setError('');
-    setMessage('');
-    try {
-      await verifyOtp(phone, otp);
-      const next = searchParams.get('next') || '/dashboard';
-      navigate(next, { replace: true });
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'OTP verification failed');
-    } finally {
-      setLoading(false);
-    }
+    dispatch(signupVerifyOtpRequested({ onSuccess: goNext }));
   };
 
-  const onPasswordSignup = async (event) => {
+  const onPasswordSignup = (event) => {
     event.preventDefault();
-    setLoading(true);
-    setError('');
-    setMessage('');
-    try {
-      if (password !== confirmPassword) {
-        throw new Error('Passwords do not match');
-      }
-      await signupPassword(phone, password);
-      const next = searchParams.get('next') || '/dashboard';
-      navigate(next, { replace: true });
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Password signup failed');
-    } finally {
-      setLoading(false);
-    }
+    dispatch(signupPasswordRequested({ onSuccess: goNext }));
   };
 
-  const onGoogleSignup = async () => {
-    setLoading(true);
-    setError('');
-    setMessage('');
-    try {
-      await googleLogin('');
-      const next = searchParams.get('next') || '/dashboard';
-      navigate(next, { replace: true });
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Google signup failed');
-    } finally {
-      setLoading(false);
-    }
+  const onGoogleSignup = () => {
+    dispatch(signupGoogleRequested({ onSuccess: goNext }));
   };
 
   return (
@@ -122,14 +75,14 @@ function Signup() {
           <div className="mb-4 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800">
             <button
               type="button"
-              onClick={() => setMode('otp')}
+              onClick={() => dispatch(setSignupMode('otp'))}
               className={`rounded-lg px-4 py-2 text-sm font-semibold ${mode === 'otp' ? 'bg-[#2f7bf6] text-white shadow' : 'text-slate-700 dark:text-slate-200'}`}
             >
               OTP Signup
             </button>
             <button
               type="button"
-              onClick={() => setMode('password')}
+              onClick={() => dispatch(setSignupMode('password'))}
               className={`rounded-lg px-4 py-2 text-sm font-semibold ${mode === 'password' ? 'bg-[#2f7bf6] text-white shadow' : 'text-slate-700 dark:text-slate-200'}`}
             >
               Password Signup
@@ -151,7 +104,11 @@ function Signup() {
                 type={otpStep === 'phone' ? 'tel' : 'text'}
                 autoComplete={otpStep === 'phone' ? 'username' : 'one-time-code'}
                 value={otpStep === 'phone' ? phone : otp}
-                onChange={(e) => (otpStep === 'phone' ? setPhone(e.target.value) : setOtp(e.target.value))}
+                onChange={(e) => (
+                  otpStep === 'phone'
+                    ? dispatch(setSignupField({ field: 'phone', value: e.target.value }))
+                    : dispatch(setSignupField({ field: 'otp', value: e.target.value }))
+                )}
                 placeholder={otpStep === 'phone' ? 'Enter phone number' : 'Enter OTP'}
               />
               <button
@@ -165,9 +122,7 @@ function Signup() {
                 <button
                   type="button"
                   onClick={() => {
-                    setOtpStep('phone');
-                    setOtp('');
-                    setMessage('');
+                    dispatch(setSignupOtpStep('phone'));
                   }}
                   className="w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100"
                 >
@@ -184,7 +139,7 @@ function Signup() {
                 type="tel"
                 autoComplete="username"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
+                onChange={(e) => dispatch(setSignupField({ field: 'phone', value: e.target.value }))}
                 placeholder="Enter phone number"
               />
               <label className="block text-sm font-semibold text-slate-700 dark:text-slate-200">Password</label>
@@ -194,7 +149,7 @@ function Signup() {
                 name="new_password"
                 autoComplete="new-password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => dispatch(setSignupField({ field: 'password', value: e.target.value }))}
                 placeholder="Enter password"
               />
               <label className="block text-sm font-semibold text-slate-700 dark:text-slate-200">Confirm Password</label>
@@ -204,7 +159,7 @@ function Signup() {
                 name="confirm_password"
                 autoComplete="new-password"
                 value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
+                onChange={(e) => dispatch(setSignupField({ field: 'confirmPassword', value: e.target.value }))}
                 placeholder="Confirm password"
               />
               <button

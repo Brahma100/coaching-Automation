@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import date
+
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -34,12 +36,14 @@ class BatchCreatePayload(BaseModel):
     name: str
     subject: str = 'General'
     academic_level: str = ''
+    max_students: int | None = Field(default=None, ge=1, le=5000)
 
 
 class BatchUpdatePayload(BaseModel):
     name: str
     subject: str = 'General'
     academic_level: str = ''
+    max_students: int | None = Field(default=None, ge=1, le=5000)
     active: bool = True
 
 
@@ -255,10 +259,11 @@ def batches_list_api_legacy(
 @router.get('/api/batches')
 def api_list_batches(
     request: Request,
+    for_date: date | None = Query(default=None),
     _: dict = Depends(_require_teacher),
     db: Session = Depends(get_db),
 ):
-    return list_batches_with_details(db, include_inactive=True)
+    return list_batches_with_details(db, include_inactive=True, for_date=for_date)
 
 
 @router.post('/api/batches')
@@ -274,11 +279,19 @@ def api_create_batch(
             name=payload.name,
             subject=payload.subject,
             academic_level=payload.academic_level,
+            max_students=payload.max_students,
             actor=session,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {'id': row.id, 'name': row.name, 'subject': row.subject, 'academic_level': row.academic_level, 'active': row.active}
+    return {
+        'id': row.id,
+        'name': row.name,
+        'subject': row.subject,
+        'academic_level': row.academic_level,
+        'max_students': row.max_students,
+        'active': row.active,
+    }
 
 
 @router.put('/api/batches/{batch_id}')
@@ -296,6 +309,7 @@ def api_update_batch(
             name=payload.name,
             subject=payload.subject,
             academic_level=payload.academic_level,
+            max_students=payload.max_students,
             active=payload.active,
             actor=session,
         )
@@ -303,7 +317,14 @@ def api_update_batch(
         message = str(exc)
         status_code = 404 if message == 'Batch not found' else 400
         raise HTTPException(status_code=status_code, detail=message) from exc
-    return {'id': row.id, 'name': row.name, 'subject': row.subject, 'academic_level': row.academic_level, 'active': row.active}
+    return {
+        'id': row.id,
+        'name': row.name,
+        'subject': row.subject,
+        'academic_level': row.academic_level,
+        'max_students': row.max_students,
+        'active': row.active,
+    }
 
 
 @router.delete('/api/batches/{batch_id}')

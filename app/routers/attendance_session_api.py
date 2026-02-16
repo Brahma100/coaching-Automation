@@ -7,16 +7,24 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.cache import cache
+from app.core.attendance_guards import (
+    available_batches_for_date as _core_available_batches_for_date,
+    extract_session_token as _core_extract_session_token,
+    require_teacher_or_admin as _core_require_teacher_or_admin,
+)
+from app.core.time_provider import default_time_provider
 from app.db import get_db
-from app.models import Batch, BatchSchedule, Role
+from app.domain.services.attendance_service import submit_attendance as domain_submit_attendance
+from app.models import Batch, BatchSchedule, CalendarOverride, Role
 from app.schemas import AttendanceItem
-from app.services.action_token_service import verify_and_consume_token, verify_token
+from app.services.action_token_service import consume_token, verify_token
 from app.services.attendance_session_service import (
     load_attendance_session_sheet,
     resolve_web_attendance_session,
-    submit_attendance_for_session,
 )
 from app.services.auth_service import validate_session_token
+from app.services.operational_brain_service import clear_operational_brain_cache
+from app.services.rate_limit_service import SafeRateLimitError, check_rate_limit
 
 
 router = APIRouter(prefix='/api/attendance', tags=['Attendance Session API'])
@@ -34,42 +42,72 @@ class AttendanceSessionSubmitRequest(BaseModel):
 
 
 def _extract_session_token(request: Request) -> str | None:
-    cookie_token = request.cookies.get('auth_session')
-    if cookie_token:
-        return cookie_token
-    auth_header = request.headers.get('Authorization', '')
-    if auth_header.lower().startswith('bearer '):
-        return auth_header.split(' ', 1)[1].strip()
-    return None
+    # DEPRECATED: use app.core.attendance_guards.extract_session_token directly.
+    return _core_extract_session_token(request)
 
 
 def _require_teacher_or_admin(request: Request) -> dict:
-    auth_user = validate_session_token(_extract_session_token(request))
-    if not auth_user:
-        raise HTTPException(status_code=403, detail='Unauthorized')
-    role = (auth_user.get('role') or '').lower()
-    if role not in (Role.TEACHER.value, Role.ADMIN.value):
-        raise HTTPException(status_code=403, detail='Unauthorized')
-    return auth_user
+    # DEPRECATED: use app.core.attendance_guards.require_teacher_or_admin directly.
+    return _core_require_teacher_or_admin(request, strict=True)
+
+
+def _available_batches_for_date(db: Session, target_date: date) -> list[Batch]:
+    # DEPRECATED: use app.core.attendance_guards.available_batches_for_date directly.
+    return _core_available_batches_for_date(db, target_date)
 
 
 @router.get('/manage/options')
 def attendance_manage_options(
     request: Request,
     batch_id: int | None = Query(default=None),
+    attendance_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     _require_teacher_or_admin(request)
-    batches = db.query(Batch).filter(Batch.active.is_(True)).order_by(Batch.name.asc()).all()
-    selected_batch_id = batch_id or (batches[0].id if batches else None)
+    target_date = attendance_date or default_time_provider.today()
+    target_weekday = int(target_date.weekday())
+    batches = _available_batches_for_date(db, target_date)
+    selected_batch_id = (
+        batch_id
+        if batch_id and any(int(row.id) == int(batch_id) for row in batches)
+        else (batches[0].id if batches else None)
+    )
     schedules = []
     if selected_batch_id:
         schedules = (
             db.query(BatchSchedule)
-            .filter(BatchSchedule.batch_id == selected_batch_id)
-            .order_by(BatchSchedule.weekday.asc(), BatchSchedule.start_time.asc())
+            .filter(
+                BatchSchedule.batch_id == selected_batch_id,
+                BatchSchedule.weekday == target_weekday,
+            )
+            .order_by(BatchSchedule.start_time.asc(), BatchSchedule.id.asc())
             .all()
         )
+
+        override = (
+            db.query(CalendarOverride)
+            .filter(
+                CalendarOverride.batch_id == selected_batch_id,
+                CalendarOverride.override_date == target_date,
+            )
+            .order_by(CalendarOverride.id.desc())
+            .first()
+        )
+        if override:
+            if override.cancelled:
+                schedules = []
+            elif override.new_start_time:
+                base_duration = int(schedules[0].duration_minutes) if schedules else 60
+                duration = int(override.new_duration_minutes or base_duration)
+                schedules = [
+                    BatchSchedule(
+                        id=-int(override.id),
+                        batch_id=int(selected_batch_id),
+                        weekday=target_weekday,
+                        start_time=override.new_start_time,
+                        duration_minutes=duration,
+                    )
+                ]
     return {
         'batches': [
             {
@@ -81,6 +119,7 @@ def attendance_manage_options(
             for row in batches
         ],
         'selected_batch_id': selected_batch_id,
+        'attendance_date': target_date.isoformat(),
         'schedules': [
             {
                 'id': row.id,
@@ -122,11 +161,26 @@ def attendance_session_get_api(
 ):
     role = None
     token_type = None
+    actor_user_id = 0
+    auth_user = None
+    session_token = _extract_session_token(request)
+    if session_token:
+        auth_user = validate_session_token(session_token)
+    request_role = (auth_user or {}).get('role')
+    request_center_id = int((auth_user or {}).get('center_id') or 0)
     if token:
         payload = None
         for candidate in ('attendance_open', 'attendance_review', 'attendance-session'):
             try:
-                payload = verify_token(db, token, expected_action_type=candidate)
+                payload = verify_token(
+                    db,
+                    token,
+                    expected_action_type=candidate,
+                    request_role=request_role,
+                    request_center_id=request_center_id,
+                    request_ip=(request.client.host if request.client else ''),
+                    request_user_agent=request.headers.get('user-agent', ''),
+                )
                 token_type = candidate
                 break
             except ValueError:
@@ -136,11 +190,18 @@ def attendance_session_get_api(
         if int(payload.get('session_id') or 0) != session_id:
             raise HTTPException(status_code=403, detail='Token does not match session')
         role = Role.TEACHER.value
+        actor_user_id = int(payload.get('teacher_id') or 0)
     else:
         auth_user = _require_teacher_or_admin(request)
         role = (auth_user.get('role') or '').lower()
+        actor_user_id = int(auth_user.get('user_id') or 0)
 
-    sheet = load_attendance_session_sheet(db, session_id)
+    sheet = load_attendance_session_sheet(
+        db,
+        session_id,
+        actor_role=role,
+        actor_user_id=actor_user_id,
+    )
     can_edit = (not sheet['locked']) or role == Role.ADMIN.value
     if token_type in ('attendance_open', 'attendance_review'):
         can_edit = sheet['session'].status not in ('closed', 'missed')
@@ -169,12 +230,26 @@ def attendance_session_submit_api(
     role = Role.TEACHER.value
     teacher_id = 0
     allow_edit_submitted = False
+    auth_user = None
+    session_token = _extract_session_token(request)
+    if session_token:
+        auth_user = validate_session_token(session_token)
+    request_role = (auth_user or {}).get('role')
+    request_center_id = int((auth_user or {}).get('center_id') or 0)
     if payload.token:
         token_payload = None
         token_type = None
         for candidate in ('attendance_open', 'attendance_review', 'attendance-session'):
             try:
-                token_payload = verify_token(db, payload.token, expected_action_type=candidate)
+                token_payload = verify_token(
+                    db,
+                    payload.token,
+                    expected_action_type=candidate,
+                    request_role=request_role,
+                    request_center_id=request_center_id,
+                    request_ip=(request.client.host if request.client else ''),
+                    request_user_agent=request.headers.get('user-agent', ''),
+                )
                 token_type = candidate
                 break
             except ValueError:
@@ -191,8 +266,22 @@ def attendance_session_submit_api(
         role = (auth_user.get('role') or '').lower()
         teacher_id = int(auth_user.get('user_id') or 0)
 
+    effective_center_id = int((auth_user or {}).get('center_id') or request_center_id or 0) or 1
     try:
-        result = submit_attendance_for_session(
+        check_rate_limit(
+            db,
+            center_id=effective_center_id,
+            scope_type='user',
+            scope_key=str(teacher_id or 0),
+            action_name='attendance_submit_session',
+            max_requests=10,
+            window_seconds=60,
+        )
+    except SafeRateLimitError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+
+    try:
+        result = domain_submit_attendance(
             db=db,
             session_id=session_id,
             records=[row.model_dump() for row in payload.records],
@@ -204,8 +293,11 @@ def attendance_session_submit_api(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if payload.token:
+        consume_token(db, payload.token)
     cache.invalidate_prefix('today_view')
     cache.invalidate_prefix('inbox')
-    cache.invalidate('admin_ops')
+    cache.invalidate_prefix('admin_ops')
     cache.invalidate_prefix('student_dashboard')
+    clear_operational_brain_cache()
     return result

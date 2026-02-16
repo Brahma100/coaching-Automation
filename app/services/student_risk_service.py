@@ -1,11 +1,12 @@
 import json
 import logging
 import time
-from datetime import date, datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import and_, inspect, text
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.core.time_provider import TimeProvider, default_time_provider
 from app.models import (
     AttendanceRecord,
     FeeRecord,
@@ -17,6 +18,7 @@ from app.models import (
     StudentRiskEvent,
     StudentRiskProfile,
 )
+from app.services.automation_failure_service import log_automation_failure
 from app.services.pending_action_service import create_pending_action
 from app.services.student_automation_engine import send_risk_soft_warning
 
@@ -31,6 +33,10 @@ WEIGHT_ATTENDANCE = 0.40
 WEIGHT_HOMEWORK = 0.30
 WEIGHT_FEE = 0.20
 WEIGHT_TESTS = 0.10
+
+
+def _warn_missing_center_filter(*, query_name: str) -> None:
+    logger.warning('center_filter_missing service=student_risk query=%s', query_name)
 
 
 def clamp_01(value: float) -> float:
@@ -111,6 +117,8 @@ def _load_test_marks_if_available(db: Session, student_id: int) -> list[float]:
     if not {'student_id', 'marks'}.issubset(columns):
         return []
 
+    if 'center_id' not in columns:
+        _warn_missing_center_filter(query_name='test_marks_without_center_id')
     if 'taken_at' in columns:
         sql = text('SELECT marks FROM test_marks WHERE student_id = :student_id ORDER BY taken_at DESC LIMIT 2')
     elif 'created_at' in columns:
@@ -132,16 +140,27 @@ def _short_reason(risk_level: str, details: dict) -> str:
     )
 
 
-def compute_student_risk(db: Session, student: Student) -> dict:
+def compute_student_risk(
+    db: Session,
+    student: Student,
+    *,
+    center_id: int,
+    time_provider: TimeProvider = default_time_provider,
+) -> dict:
+    center_id = int(center_id or 0)
+    if center_id <= 0:
+        raise ValueError('center_id is required')
     attendance_rows = (
         db.query(AttendanceRecord)
-        .filter(AttendanceRecord.student_id == student.id)
+        .join(Student, Student.id == AttendanceRecord.student_id)
+        .filter(AttendanceRecord.student_id == student.id, Student.center_id == center_id)
         .order_by(AttendanceRecord.attendance_date.desc(), AttendanceRecord.id.desc())
         .limit(WINDOW_ATTENDANCE)
         .all()
     )
     attendance_score, attendance_details = compute_attendance_score(attendance_rows)
 
+    _warn_missing_center_filter(query_name='homework_assigned_window')
     assigned_homework_ids = [
         row[0]
         for row in (
@@ -156,16 +175,23 @@ def compute_student_risk(db: Session, student: Student) -> dict:
     if assigned_homework_ids:
         submitted_count = (
             db.query(HomeworkSubmission)
+            .join(Student, Student.id == HomeworkSubmission.student_id)
             .filter(
                 HomeworkSubmission.student_id == student.id,
                 HomeworkSubmission.homework_id.in_(assigned_homework_ids),
+                Student.center_id == center_id,
             )
             .count()
         )
     homework_score, homework_details = compute_homework_score(assigned_count, submitted_count)
 
-    today = date.today()
-    unpaid_rows = db.query(FeeRecord).filter(FeeRecord.student_id == student.id, FeeRecord.is_paid.is_(False)).all()
+    today = time_provider.today()
+    unpaid_rows = (
+        db.query(FeeRecord)
+        .join(Student, Student.id == FeeRecord.student_id)
+        .filter(FeeRecord.student_id == student.id, FeeRecord.is_paid.is_(False), Student.center_id == center_id)
+        .all()
+    )
     max_overdue_days = 0
     for fee in unpaid_rows:
         overdue_days = (today - fee.due_date).days
@@ -190,7 +216,7 @@ def compute_student_risk(db: Session, student: Student) -> dict:
             'fees': WEIGHT_FEE,
             'tests': WEIGHT_TESTS,
         },
-        'computed_at': datetime.utcnow().isoformat(),
+        'computed_at': time_provider.now().isoformat(),
     }
     reason_summary = _short_reason(risk_level, details)
 
@@ -207,11 +233,25 @@ def compute_student_risk(db: Session, student: Student) -> dict:
     }
 
 
-def recompute_student_risk(db: Session, student: Student) -> dict:
-    payload = compute_student_risk(db, student)
-    now = datetime.utcnow()
+def recompute_student_risk(
+    db: Session,
+    student: Student,
+    *,
+    center_id: int,
+    time_provider: TimeProvider = default_time_provider,
+) -> dict:
+    center_id = int(center_id or 0)
+    if center_id <= 0:
+        raise ValueError('center_id is required')
+    payload = compute_student_risk(db, student, center_id=center_id, time_provider=time_provider)
+    now = time_provider.now().replace(tzinfo=None)
 
-    profile = db.query(StudentRiskProfile).filter(StudentRiskProfile.student_id == student.id).first()
+    profile = (
+        db.query(StudentRiskProfile)
+        .join(Student, Student.id == StudentRiskProfile.student_id)
+        .filter(StudentRiskProfile.student_id == student.id, Student.center_id == center_id)
+        .first()
+    )
     previous_level = profile.risk_level if profile else None
 
     if not profile:
@@ -242,6 +282,7 @@ def recompute_student_risk(db: Session, student: Student) -> dict:
                 PendingAction.type == 'student_risk',
                 PendingAction.student_id == student.id,
                 PendingAction.status == 'open',
+                PendingAction.center_id == center_id,
             ).first()
             if not existing_open:
                 create_pending_action(
@@ -252,22 +293,55 @@ def recompute_student_risk(db: Session, student: Student) -> dict:
                     note=payload['reason_summary'],
                 )
             try:
-                send_risk_soft_warning(db, student_id=student.id)
-            except Exception:
-                logger.exception('student_risk_soft_warning_failed', extra={'student_id': student.id})
+                send_risk_soft_warning(db, student_id=student.id, time_provider=time_provider)
+            except Exception as exc:
+                logger.error(
+                    'automation_failure',
+                    extra={
+                        'job': 'student_risk_soft_warning',
+                        'center_id': int(student.center_id or 1),
+                        'entity_id': int(student.id),
+                        'error': str(exc),
+                    },
+                )
     db.commit()
     return payload
 
 
-def recompute_all_student_risk(db: Session) -> dict:
+def recompute_all_student_risk(db: Session, *, center_id: int, time_provider: TimeProvider = default_time_provider) -> dict:
     started = time.perf_counter()
-    students = db.query(Student).order_by(Student.id.asc()).all()
+    center_id = int(center_id or 0)
+    if center_id <= 0:
+        raise ValueError('center_id is required')
+    students = db.query(Student).filter(Student.center_id == center_id).order_by(Student.id.asc()).all()
     high_count = 0
     medium_count = 0
     low_count = 0
 
     for student in students:
-        result = recompute_student_risk(db, student)
+        try:
+            result = recompute_student_risk(db, student, center_id=center_id, time_provider=time_provider)
+        except Exception as exc:
+            db.rollback()
+            logger.error(
+                'automation_failure',
+                extra={
+                    'job': 'student_risk_recompute',
+                    'center_id': int(student.center_id or 1),
+                    'entity_id': int(student.id),
+                    'error': str(exc),
+                },
+            )
+            log_automation_failure(
+                db,
+                job_name='student_risk_recompute',
+                entity_type='student',
+                entity_id=int(student.id),
+                error_message=str(exc),
+                center_id=int(student.center_id or 1),
+            )
+            db.commit()
+            continue
         if result['risk_level'] == 'HIGH':
             high_count += 1
         elif result['risk_level'] == 'MEDIUM':
@@ -295,11 +369,15 @@ def recompute_all_student_risk(db: Session) -> dict:
     }
 
 
-def list_student_risk_profiles(db: Session, batch_id: int | None = None) -> list[dict]:
+def list_student_risk_profiles(db: Session, *, center_id: int, batch_id: int | None = None) -> list[dict]:
+    center_id = int(center_id or 0)
+    if center_id <= 0:
+        raise ValueError('center_id is required')
     query = (
         db.query(StudentRiskProfile)
         .options(selectinload(StudentRiskProfile.student).joinedload(Student.batch))
         .join(Student, StudentRiskProfile.student_id == Student.id)
+        .filter(Student.center_id == center_id)
     )
     if batch_id is not None:
         query = query.join(
@@ -314,7 +392,7 @@ def list_student_risk_profiles(db: Session, batch_id: int | None = None) -> list
     notes_by_student = {
         row.student_id: row.note
         for row in db.query(PendingAction)
-        .filter(PendingAction.type == 'student_risk', PendingAction.status == 'open')
+        .filter(PendingAction.type == 'student_risk', PendingAction.status == 'open', PendingAction.center_id == center_id)
         .all()
     }
     return [
@@ -336,15 +414,23 @@ def list_student_risk_profiles(db: Session, batch_id: int | None = None) -> list
     ]
 
 
-def get_student_risk_detail(db: Session, student_id: int) -> dict | None:
-    student = db.query(Student).filter(Student.id == student_id).first()
+def get_student_risk_detail(db: Session, student_id: int, *, center_id: int) -> dict | None:
+    center_id = int(center_id or 0)
+    if center_id <= 0:
+        raise ValueError('center_id is required')
+    student = db.query(Student).filter(Student.id == student_id, Student.center_id == center_id).first()
     if not student:
         return None
 
-    profile = db.query(StudentRiskProfile).filter(StudentRiskProfile.student_id == student_id).first()
+    profile = (
+        db.query(StudentRiskProfile)
+        .join(Student, Student.id == StudentRiskProfile.student_id)
+        .filter(StudentRiskProfile.student_id == student_id, Student.center_id == center_id)
+        .first()
+    )
     if not profile:
         # No profile yet: compute a non-persistent preview for explainability.
-        preview = compute_student_risk(db, student)
+        preview = compute_student_risk(db, student, center_id=center_id, time_provider=default_time_provider)
         return {
             'student_id': student.id,
             'student_name': student.name,
@@ -361,7 +447,8 @@ def get_student_risk_detail(db: Session, student_id: int) -> dict | None:
 
     latest_event = (
         db.query(StudentRiskEvent)
-        .filter(StudentRiskEvent.student_id == student_id)
+        .join(Student, Student.id == StudentRiskEvent.student_id)
+        .filter(StudentRiskEvent.student_id == student_id, Student.center_id == center_id)
         .order_by(StudentRiskEvent.created_at.desc(), StudentRiskEvent.id.desc())
         .first()
     )
@@ -374,7 +461,7 @@ def get_student_risk_detail(db: Session, student_id: int) -> dict | None:
 
     # If reasons are unavailable, generate a read-only preview breakdown.
     if not reasons:
-        reasons = compute_student_risk(db, student)['reasons']
+        reasons = compute_student_risk(db, student, center_id=center_id, time_provider=default_time_provider)['reasons']
 
     return {
         'student_id': student.id,

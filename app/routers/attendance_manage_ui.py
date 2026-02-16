@@ -7,10 +7,15 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
+from app.core.attendance_guards import (
+    available_batches_for_date as _core_available_batches_for_date,
+    extract_session_token as _core_extract_session_token,
+    require_teacher_or_admin as _core_require_teacher_or_admin,
+)
+from app.core.time_provider import default_time_provider
 from app.db import get_db
-from app.models import Batch, BatchSchedule, Role
+from app.models import Batch, BatchSchedule, CalendarOverride, Role
 from app.services.attendance_session_service import resolve_web_attendance_session
-from app.services.auth_service import validate_session_token
 
 
 templates = Jinja2Templates(directory='app/ui/templates')
@@ -18,25 +23,23 @@ router = APIRouter(prefix='/ui/attendance', tags=['UI Attendance'])
 
 
 def _extract_session_token(request: Request) -> str | None:
-    cookie_token = request.cookies.get('auth_session')
-    if cookie_token:
-        return cookie_token
-    auth_header = request.headers.get('Authorization', '')
-    if auth_header.lower().startswith('bearer '):
-        return auth_header.split(' ', 1)[1].strip()
-    return None
+    # DEPRECATED: use app.core.attendance_guards.extract_session_token directly.
+    return _core_extract_session_token(request)
 
 
 def _require_teacher_or_admin(request: Request) -> dict:
+    # DEPRECATED: use app.core.attendance_guards.require_teacher_or_admin directly.
     auth_user = getattr(request.state, 'auth_user', None)
-    if not auth_user:
-        auth_user = validate_session_token(_extract_session_token(request))
-    if not auth_user:
-        return {}
-    role = (auth_user.get('role') or '').lower()
-    if role not in (Role.TEACHER.value, Role.ADMIN.value):
-        return {}
-    return auth_user
+    if auth_user:
+        role = (auth_user.get('role') or '').lower()
+        if role in (Role.TEACHER.value, Role.ADMIN.value):
+            return auth_user
+    return _core_require_teacher_or_admin(request, strict=False)
+
+
+def _available_batches_for_date(db: Session, target_date: date) -> list[Batch]:
+    # DEPRECATED: use app.core.attendance_guards.available_batches_for_date directly.
+    return _core_available_batches_for_date(db, target_date)
 
 
 @router.get('/manage')
@@ -52,17 +55,54 @@ def attendance_manage_page(
     if not auth_user:
         return RedirectResponse(url='/ui/login', status_code=303)
 
-    selected_date = attendance_date or date.today().isoformat()
-    batches = db.query(Batch).filter(Batch.active.is_(True)).order_by(Batch.name.asc()).all()
-    selected_batch_id = batch_id or (batches[0].id if batches else None)
+    selected_date = attendance_date or default_time_provider.today().isoformat()
+    try:
+        target_date = date.fromisoformat(selected_date)
+    except ValueError:
+        target_date = default_time_provider.today()
+        selected_date = target_date.isoformat()
+    target_weekday = int(target_date.weekday())
+    batches = _available_batches_for_date(db, target_date)
+    selected_batch_id = (
+        batch_id
+        if batch_id and any(int(row.id) == int(batch_id) for row in batches)
+        else (batches[0].id if batches else None)
+    )
     schedules = []
     if selected_batch_id:
         schedules = (
             db.query(BatchSchedule)
-            .filter(BatchSchedule.batch_id == selected_batch_id)
-            .order_by(BatchSchedule.weekday.asc(), BatchSchedule.start_time.asc())
+            .filter(
+                BatchSchedule.batch_id == selected_batch_id,
+                BatchSchedule.weekday == target_weekday,
+            )
+            .order_by(BatchSchedule.start_time.asc(), BatchSchedule.id.asc())
             .all()
         )
+        override = (
+            db.query(CalendarOverride)
+            .filter(
+                CalendarOverride.batch_id == selected_batch_id,
+                CalendarOverride.override_date == target_date,
+            )
+            .order_by(CalendarOverride.id.desc())
+            .first()
+        )
+        if override:
+            if override.cancelled:
+                schedules = []
+            elif override.new_start_time:
+                base_duration = int(schedules[0].duration_minutes) if schedules else 60
+                duration = int(override.new_duration_minutes or base_duration)
+                schedules = [
+                    BatchSchedule(
+                        id=-int(override.id),
+                        batch_id=int(selected_batch_id),
+                        weekday=target_weekday,
+                        start_time=override.new_start_time,
+                        duration_minutes=duration,
+                    )
+                ]
 
     return templates.TemplateResponse(
         'attendance_manage.html',

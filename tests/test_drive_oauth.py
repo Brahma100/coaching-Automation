@@ -1,6 +1,7 @@
-﻿import tempfile
+import tempfile
 import unittest
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -8,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base, get_db
-from app.models import DriveOAuthToken
+from app.models import AuthUser, DriveOAuthToken
 from app.routers import drive_oauth
 from app.services import drive_oauth_service
 
@@ -26,8 +27,10 @@ class DriveOAuthTests(unittest.TestCase):
         cls._orig_exchange_code = drive_oauth.exchange_code_for_refresh_token
 
         def fake_validate_session_token(token: str | None):
-            if token == 'token-admin':
-                return {'user_id': 9001, 'phone': '9999999999', 'role': 'admin'}
+            if token == 'token-admin-c1':
+                return {'user_id': 9001, 'phone': '9999999999', 'role': 'admin', 'center_id': 1}
+            if token == 'token-admin-c2':
+                return {'user_id': 9002, 'phone': '8888888888', 'role': 'admin', 'center_id': 2}
             return None
 
         drive_oauth.validate_session_token = fake_validate_session_token
@@ -57,17 +60,86 @@ class DriveOAuthTests(unittest.TestCase):
         db = self._session_factory()
         try:
             db.query(DriveOAuthToken).delete()
+            db.query(AuthUser).delete()
+            db.add(AuthUser(id=9001, phone='9999999999', role='admin', center_id=1))
+            db.add(AuthUser(id=9002, phone='8888888888', role='admin', center_id=2))
             db.commit()
         finally:
             db.close()
 
-    def test_oauth_callback_stores_refresh_token(self):
+    def _oauth_state_from_start(self, token: str) -> str:
+        response = self.client.get('/api/drive/oauth/start', headers={'Authorization': f'Bearer {token}'}, follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        location = response.headers.get('location')
+        self.assertIsNotNone(location)
+        return parse_qs(urlparse(location).query).get('state', [''])[0]
+
+    def test_oauth_callback_rejects_missing_state(self):
         def fake_exchange(code: str):
             return 'refresh-token-xyz', 'access-token-abc'
 
         drive_oauth.exchange_code_for_refresh_token = fake_exchange
+        response = self.client.get('/api/drive/oauth/callback?code=test-code', headers={'Authorization': 'Bearer token-admin-c1'})
+        self.assertEqual(response.status_code, 400)
 
-        response = self.client.get('/api/drive/oauth/callback?code=test-code', headers={'Authorization': 'Bearer token-admin'})
+    def test_oauth_callback_rejects_expired_state(self):
+        state = self._oauth_state_from_start('token-admin-c1')
+        payload = drive_oauth_service._state_decode(state)
+        payload['issued_at'] = int(payload.get('issued_at') or 0) - 7200
+        expired_state = drive_oauth_service._state_encode(payload)
+
+        def fake_exchange(code: str):
+            return 'refresh-token-xyz', 'access-token-abc'
+
+        drive_oauth.exchange_code_for_refresh_token = fake_exchange
+        response = self.client.get(
+            f'/api/drive/oauth/callback?code=test-code&state={expired_state}',
+            headers={'Authorization': 'Bearer token-admin-c1'},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_oauth_callback_rejects_replay(self):
+        state = self._oauth_state_from_start('token-admin-c1')
+
+        def fake_exchange(code: str):
+            return 'refresh-token-xyz', 'access-token-abc'
+
+        drive_oauth.exchange_code_for_refresh_token = fake_exchange
+        first = self.client.get(
+            f'/api/drive/oauth/callback?code=test-code&state={state}',
+            headers={'Authorization': 'Bearer token-admin-c1'},
+        )
+        second = self.client.get(
+            f'/api/drive/oauth/callback?code=test-code&state={state}',
+            headers={'Authorization': 'Bearer token-admin-c1'},
+        )
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 400)
+
+    def test_oauth_callback_rejects_center_mismatch(self):
+        state_center_2 = self._oauth_state_from_start('token-admin-c2')
+
+        def fake_exchange(code: str):
+            return 'refresh-token-xyz', 'access-token-abc'
+
+        drive_oauth.exchange_code_for_refresh_token = fake_exchange
+        response = self.client.get(
+            f'/api/drive/oauth/callback?code=test-code&state={state_center_2}',
+            headers={'Authorization': 'Bearer token-admin-c1'},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_oauth_callback_valid_flow(self):
+        state = self._oauth_state_from_start('token-admin-c1')
+
+        def fake_exchange(code: str):
+            return 'refresh-token-xyz', 'access-token-abc'
+
+        drive_oauth.exchange_code_for_refresh_token = fake_exchange
+        response = self.client.get(
+            f'/api/drive/oauth/callback?code=test-code&state={state}',
+            headers={'Authorization': 'Bearer token-admin-c1'},
+        )
         self.assertEqual(response.status_code, 200)
 
         db = self._session_factory()
@@ -79,7 +151,7 @@ class DriveOAuthTests(unittest.TestCase):
             db.close()
 
     def test_drive_status_endpoint(self):
-        response = self.client.get('/api/drive/status', headers={'Authorization': 'Bearer token-admin'})
+        response = self.client.get('/api/drive/status', headers={'Authorization': 'Bearer token-admin-c1'})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {'connected': False})
 

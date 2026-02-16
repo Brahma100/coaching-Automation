@@ -1,21 +1,26 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from app.core.time_provider import default_time_provider
 from app.db import get_db
-from datetime import datetime
 
 from app.services.action_token_service import load_token_row, verify_token
+from app.services.auth_service import validate_session_token
 
 
 router = APIRouter(prefix='/api/tokens', tags=['Tokens'])
+logger = logging.getLogger(__name__)
 
 ALLOWED_TOKEN_TYPES = {'attendance_open', 'attendance_review', 'class_start', 'session_summary'}
 
 
 @router.get('/validate')
 def validate_token(
+    request: Request,
     token: str = Query(...),
     session_id: int = Query(...),
     expected_type: str | None = Query(default=None, alias='expected'),
@@ -29,9 +34,23 @@ def validate_token(
     payload = None
     matched_type = None
     token_row = load_token_row(db, token)
+    session_token = request.cookies.get('auth_session')
+    if not session_token:
+        authorization = request.headers.get('authorization', '')
+        if authorization.lower().startswith('bearer '):
+            session_token = authorization[7:].strip()
+    request_user = validate_session_token(session_token)
     for candidate in candidates:
         try:
-            payload = verify_token(db, token, expected_action_type=candidate)
+            payload = verify_token(
+                db,
+                token,
+                expected_action_type=candidate,
+                request_role=(request_user or {}).get('role'),
+                request_center_id=(request_user or {}).get('center_id'),
+                request_ip=(request.client.host if request.client else ''),
+                request_user_agent=request.headers.get('user-agent', ''),
+            )
             matched_type = candidate
             break
         except ValueError as exc:
@@ -39,9 +58,8 @@ def validate_token(
             continue
 
     if not payload or not matched_type:
-        if token_row and token_row.expires_at < datetime.utcnow():
-            token_row.consumed = True
-            db.commit()
+        if token_row and token_row.expires_at < default_time_provider.now().replace(tzinfo=None):
+            logger.warning('read_endpoint_side_effect_removed endpoint=/api/tokens/validate side_effect=mark_expired_token_consumed')
         raise HTTPException(status_code=401, detail=str(last_error) if last_error else 'Invalid token')
 
     token_session_id = int(payload.get('session_id') or 0)

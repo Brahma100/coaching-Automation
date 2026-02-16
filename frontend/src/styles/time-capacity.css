@@ -1,0 +1,236 @@
+.time-capacity-hero {
+  background:
+    radial-gradient(circle at 20% 10%, rgba(47, 123, 246, 0.12), transparent 48%),
+    radial-gradient(circle at 84% 90%, rgba(34, 197, 94, 0.12), transparent 42%),
+    linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.time-capacity-grid {
+  scrollbar-width: thin;
+}
+
+.time-capacity-bars {
+  display: grid;
+  gap: 10px;
+}
+
+.time-capacity-bar-row {
+  display: grid;
+  grid-template-columns: 56px 1fr 56px;
+  align-items: center;
+  gap: 10px;
+}
+
+.time-capacity-label {
+  font-size: 12px;
+  color: #475569;
+  font-weight: 600;
+}
+
+.time-capacity-value {
+  font-size: 12px;
+  color: #334155;
+  text-align: right;
+  font-weight: 700;
+}
+
+.time-capacity-tabbar button {
+  min-height: 42px;
+}
+
+.time-capacity-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.time-capacity-reschedule-option {
+  min-height: 52px;
+}
+
+.time-capacity-track {
+  height: 12px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.time-capacity-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2f7bf6 0%, #14b8a6 100%);
+}
+
+.time-capacity-legend-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.time-capacity-steps {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.time-capacity-step {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.time-capacity-step-badge {
+  align-items: center;
+  background: #e2e8f0;
+  border-radius: 999px;
+  color: #334155;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 700;
+  height: 20px;
+  justify-content: center;
+  width: 20px;
+}
+
+.time-capacity-step.active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.time-capacity-step.active .time-capacity-step-badge {
+  background: #2f7bf6;
+  color: #fff;
+}
+
+.time-slot-item {
+  cursor: pointer;
+}
+
+.time-slot-tooltip {
+  white-space: pre-wrap;
+}
+
+.time-capacity-drawer-backdrop {
+  background: rgba(15, 23, 42, 0.35);
+  border: 0;
+  inset: 0;
+  position: fixed;
+  z-index: 45;
+}
+
+.time-capacity-drawer {
+  background: #fff;
+  border-left: 1px solid #e2e8f0;
+  bottom: 0;
+  max-width: 380px;
+  overflow: auto;
+  padding: 16px;
+  position: fixed;
+  right: 0;
+  top: 0;
+  width: min(92vw, 380px);
+  z-index: 50;
+}
+
+.time-capacity-modal-overlay {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.42);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 16px;
+  position: fixed;
+  z-index: 55;
+}
+
+.time-capacity-modal {
+  background: #fff;
+  border-radius: 14px;
+  max-width: 460px;
+  padding: 16px;
+  width: 100%;
+}
+
+.dark .time-capacity-hero {
+  background:
+    radial-gradient(circle at 20% 10%, rgba(59, 130, 246, 0.24), transparent 48%),
+    radial-gradient(circle at 84% 90%, rgba(16, 185, 129, 0.18), transparent 42%),
+    linear-gradient(135deg, #0b1220 0%, #101b2f 100%);
+  border-color: #334155;
+}
+
+.dark .time-capacity-hero h2 {
+  color: #f8fafc;
+}
+
+.dark .time-capacity-hero p {
+  color: #cbd5e1;
+}
+
+.dark .time-capacity-step {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+.dark .time-capacity-step p {
+  color: #cbd5e1;
+}
+
+.dark .time-capacity-step-badge {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+.dark .time-capacity-step.active {
+  background: #0b2a4a;
+  border-color: #3b82f6;
+}
+
+.dark .time-capacity-legend {
+  border-color: #334155;
+}
+
+.dark .time-capacity-drawer {
+  background: #0f172a;
+  border-left-color: #334155;
+}
+
+.dark .time-capacity-modal {
+  background: #0f172a;
+  border: 1px solid #334155;
+}
+
+@media (max-width: 640px) {
+  .time-capacity-tabbar {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .time-capacity-tabbar button {
+    width: 100%;
+  }
+
+  .time-capacity-legend-sticky {
+    top: 8px;
+  }
+
+  .time-capacity-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .time-capacity-empty button {
+    width: 100%;
+  }
+
+  .time-capacity-bar-row {
+    grid-template-columns: 52px 1fr 64px;
+    gap: 8px;
+  }
+}

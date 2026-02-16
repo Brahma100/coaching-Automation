@@ -479,6 +479,21 @@
   z-index: 4;
 }
 
+.calendar-now-label {
+  position: absolute;
+  top: -11px;
+  right: 6px;
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.4;
+  color: #fff;
+  background: #dc2626;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.24);
+  white-space: nowrap;
+}
+
 .calendar-event-positioner {
   position: absolute;
   left: 4px;
@@ -512,6 +527,11 @@
   overflow: hidden;
   line-height: 1.2;
   min-width: 0;
+}
+
+.calendar-event-card:hover {
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.14);
+  border-color: rgba(148, 163, 184, 0.45);
 }
 
 
@@ -1045,22 +1065,81 @@
 
 .calendar-editor-grid {
   display: grid;
-  gap: 10px;
+  gap: 14px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .calendar-editor-grid label {
   display: grid;
-  gap: 4px;
+  gap: 6px;
   font-size: 12px;
   font-weight: 700;
+  color: #314b72;
 }
 
 .calendar-editor-grid input,
-.calendar-editor-grid select {
-  border: 1px solid #cfd9eb;
-  border-radius: 8px;
-  padding: 8px;
+.calendar-editor-grid select,
+.calendar-editor-grid textarea {
+  border: 1px solid #c6d5ee;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #f7faff;
+  color: #13294b;
+  font-size: 14px;
+}
+
+.calendar-editor-grid input:focus,
+.calendar-editor-grid select:focus,
+.calendar-editor-grid textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
+
+.calendar-editor-field-full {
+  grid-column: 1 / -1;
+}
+
+.calendar-editor-intro {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: #6b83ab;
+}
+
+.calendar-override-modal-panel {
+  max-width: 680px !important;
+}
+
+.calendar-override-modal-body {
+  padding-top: 18px !important;
+  padding-bottom: 14px !important;
+}
+
+.calendar-override-modal-footer {
+  padding-top: 12px !important;
+  padding-bottom: 14px !important;
+}
+
+.calendar-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.calendar-editor-footer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.calendar-editor-grid textarea::placeholder,
+.calendar-editor-grid input::placeholder {
+  color: #8ea3c8;
+}
+
+.calendar-event-cta:hover {
+  background: linear-gradient(135deg, #1866d6, #2d83f3) !important;
 }
 
 .calendar-cancelled-toggle {
@@ -1685,10 +1764,36 @@
 }
 
 .dark .calendar-editor-grid input,
-.dark .calendar-editor-grid select {
+.dark .calendar-editor-grid select,
+.dark .calendar-editor-grid textarea {
   background: #0f172a;
   border-color: #24324a;
   color: #e2e8f0;
+}
+
+.dark .calendar-editor-grid label {
+  color: #b9c9e8;
+}
+
+.dark .calendar-editor-intro {
+  color: #9fb3d9;
+}
+
+.dark .calendar-editor-grid textarea::placeholder,
+.dark .calendar-editor-grid input::placeholder {
+  color: #8aa1c9;
+}
+
+.dark .calendar-event-cta,
+.dark .calendar-modal-actions-primary .calendar-action-btn.calendar-event-cta {
+  background: linear-gradient(135deg, #1a70ea, #3890ff) !important;
+  border-color: #2b7cf0 !important;
+  color: #ffffff !important;
+}
+
+.dark .calendar-event-cta:hover,
+.dark .calendar-modal-actions-primary .calendar-action-btn.calendar-event-cta:hover {
+  background: linear-gradient(135deg, #175fc8, #327de0) !important;
 }
 
 .dark .calendar-conflict-info {

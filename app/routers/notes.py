@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -10,6 +11,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.cache import cache, cache_key
+from app.domain.services.notes_service import create_note as domain_create_note
+from app.core.time_provider import default_time_provider
 from app.db import get_db
 from app.models import Batch, Chapter, Note, NoteVersion, Role, Subject, Tag, Topic
 from app.services.auth_service import validate_session_token
@@ -18,7 +21,6 @@ from app.services.google_drive_service import DriveStorageError, delete_file, st
 from app.services.notes_service import (
     NOTES_ANALYTICS_CACHE_PREFIX,
     NOTES_CACHE_PREFIX,
-    create_download_log,
     get_student_batch_ids,
     invalidate_notes_cache,
     list_notes_analytics,
@@ -32,6 +34,7 @@ from app.services.student_portal_service import require_student_session
 
 
 router = APIRouter(prefix='/api/notes', tags=['Notes'])
+logger = logging.getLogger(__name__)
 
 
 def _resolve_token(request: Request) -> str | None:
@@ -220,10 +223,10 @@ def notes_metadata(
     if role == Role.STUDENT.value:
         auth = require_student_session(db, _resolve_token(request))
         student = auth['student']
-        batch_ids = get_student_batch_ids(db, student)
+        batch_ids = get_student_batch_ids(db, student, center_id=int(session.get('center_id') or 0))
         batches = db.query(Batch).filter(Batch.id.in_(batch_ids)).order_by(Batch.name.asc()).all() if batch_ids else []
     else:
-        batches = db.query(Batch).filter(Batch.active.is_(True)).order_by(Batch.name.asc()).all()
+        batches = db.query(Batch).filter(Batch.active.is_(True), Batch.center_id == int(session.get('center_id') or 0)).order_by(Batch.name.asc()).all()
 
     return {
         'subjects': [{'id': row.id, 'name': row.name} for row in subjects],
@@ -263,7 +266,7 @@ def notes_analytics(
         if cached is not None:
             return cached
 
-    payload = list_notes_analytics(db, role=role, student=student)
+    payload = list_notes_analytics(db, center_id=int(session.get('center_id') or 0), role=role, student=student)
     cache.set_cached(key, payload, ttl=60)
     return payload
 
@@ -309,6 +312,7 @@ def list_notes(
 
     query = list_notes_query(
         db,
+        center_id=int(session.get('center_id') or 0),
         batch_id=batch_id,
         subject_id=subject_id,
         topic_id=topic_id,
@@ -398,72 +402,35 @@ async def upload_note(
         parsed_tags = _parse_multi_values(tags)
 
         actor_id = int(session.get('user_id') or 0)
-        if note_id:
-            note = db.query(Note).options(joinedload(Note.versions)).filter(Note.id == note_id).first()
-            if not note:
-                raise HTTPException(status_code=404, detail='Note not found')
-            note.title = clean_title
-            note.description = description or ''
-            note.subject_id = subject.id
-            note.chapter_id = chapter.id if chapter else None
-            note.topic_id = topic.id if topic else None
-            note.drive_file_id = drive_file_id
-            note.file_size = len(file_bytes)
-            note.mime_type = 'application/pdf'
-            note.visible_to_students = visible_to_students
-            note.visible_to_parents = visible_to_parents
-            note.release_at = release_at_dt
-            note.expire_at = expire_at_dt
-            note.updated_at = datetime.utcnow()
-            next_version = max((row.version_number for row in note.versions), default=0) + 1
-        else:
-            note = Note(
-                title=clean_title,
-                description=description or '',
-                subject_id=subject.id,
-                chapter_id=chapter.id if chapter else None,
-                topic_id=topic.id if topic else None,
-                drive_file_id=drive_file_id,
-                file_size=len(file_bytes),
-                mime_type='application/pdf',
-                uploaded_by=actor_id,
-                visible_to_students=visible_to_students,
-                visible_to_parents=visible_to_parents,
-                release_at=release_at_dt,
-                expire_at=expire_at_dt,
-            )
-            db.add(note)
-            db.flush()
-            next_version = 1
-
-        sync_note_batches(db, note, parsed_batch_ids)
-        sync_note_tags(db, note, parsed_tags)
-
-        db.add(
-            NoteVersion(
-                note_id=note.id,
-                version_number=next_version,
-                drive_file_id=drive_file_id,
-                file_size=len(file_bytes),
-                mime_type='application/pdf',
-                uploaded_by=actor_id,
-            )
+        actor_center_id = int(session.get('center_id') or 1)
+        return domain_create_note(
+            db,
+            title=clean_title,
+            description=description or '',
+            subject=subject,
+            chapter=chapter,
+            topic=topic,
+            drive_file_id=drive_file_id,
+            file_size=len(file_bytes),
+            visible_to_students=visible_to_students,
+            visible_to_parents=visible_to_parents,
+            release_at=release_at_dt,
+            expire_at=expire_at_dt,
+            batch_ids=parsed_batch_ids,
+            tags=parsed_tags,
+            actor_id=actor_id,
+            actor_center_id=actor_center_id,
+            note_id=note_id,
         )
-        db.commit()
-        db.refresh(note)
-        invalidate_notes_cache()
-
-        result = db.query(Note).options(joinedload(Note.batches), joinedload(Note.tags), joinedload(Note.versions), joinedload(Note.subject), joinedload(Note.chapter), joinedload(Note.topic)).filter(Note.id == note.id).first()
-        return {
-            'ok': True,
-            'note': serialize_note(result),
-        }
     except HTTPException:
         db.rollback()
         raise
     except ValueError as exc:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        detail = str(exc)
+        if detail == 'Note not found':
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
 
 
 @router.put('/{note_id}')
@@ -493,7 +460,12 @@ async def update_note(
     if not clean_title:
         raise HTTPException(status_code=400, detail='Title is required')
 
-    note = db.query(Note).options(joinedload(Note.versions)).filter(Note.id == note_id).first()
+    note = (
+        db.query(Note)
+        .options(joinedload(Note.versions))
+        .filter(Note.id == note_id, Note.center_id == int(session.get('center_id') or 0))
+        .first()
+    )
     if not note:
         raise HTTPException(status_code=404, detail='Note not found')
 
@@ -543,7 +515,7 @@ async def update_note(
         note.visible_to_parents = visible_to_parents
         note.release_at = release_at_dt
         note.expire_at = expire_at_dt
-        note.updated_at = datetime.utcnow()
+        note.updated_at = default_time_provider.now().replace(tzinfo=None)
 
         actor_id = int(session.get('user_id') or 0)
         if has_new_file and new_drive_file_id and new_file_size is not None:
@@ -576,7 +548,12 @@ async def update_note(
             except (DriveNotConnectedError, DriveStorageError) as exc:
                 warning_message = f'Note updated but could not remove previous Drive file: {exc}'
 
-        result = db.query(Note).options(joinedload(Note.batches), joinedload(Note.tags), joinedload(Note.versions), joinedload(Note.subject), joinedload(Note.chapter), joinedload(Note.topic)).filter(Note.id == note.id).first()
+        result = (
+            db.query(Note)
+            .options(joinedload(Note.batches), joinedload(Note.tags), joinedload(Note.versions), joinedload(Note.subject), joinedload(Note.chapter), joinedload(Note.topic))
+            .filter(Note.id == note.id, Note.center_id == int(session.get('center_id') or 0))
+            .first()
+        )
         payload = {
             'ok': True,
             'note': serialize_note(result),
@@ -601,7 +578,12 @@ def download_note(
     session = _require_session(request)
     role = (session.get('role') or '').lower()
 
-    note = db.query(Note).options(joinedload(Note.batches)).filter(Note.id == note_id).first()
+    note = (
+        db.query(Note)
+        .options(joinedload(Note.batches))
+        .filter(Note.id == note_id, Note.center_id == int(session.get('center_id') or 0))
+        .first()
+    )
     if not note:
         raise HTTPException(status_code=404, detail='Note not found')
 
@@ -609,13 +591,13 @@ def download_note(
     matched_batch_id = None
     if role == Role.STUDENT.value:
         student = require_student_session(db, _resolve_token(request))['student']
-        batch_ids = set(get_student_batch_ids(db, student))
+        batch_ids = set(get_student_batch_ids(db, student, center_id=int(session.get('center_id') or 0)))
         note_batch_ids = {batch.id for batch in note.batches}
         allowed_batch_ids = sorted(batch_ids.intersection(note_batch_ids))
         if not allowed_batch_ids:
             raise HTTPException(status_code=403, detail='You do not have access to this note')
         matched_batch_id = allowed_batch_ids[0]
-        now = datetime.utcnow()
+        now = default_time_provider.now().replace(tzinfo=None)
         if not note.visible_to_students:
             raise HTTPException(status_code=403, detail='Note is not visible to students')
         if note.release_at and note.release_at > now:
@@ -630,14 +612,7 @@ def download_note(
     except DriveStorageError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    create_download_log(
-        db,
-        note_id=note.id,
-        student_id=(student.id if student else None),
-        batch_id=matched_batch_id,
-        ip_address=(request.client.host if request.client else ''),
-        user_agent=request.headers.get('user-agent', ''),
-    )
+    logger.warning('read_endpoint_side_effect_removed endpoint=/api/notes/%s/download side_effect=download_log_insert', note.id)
 
     headers: dict[str, Any] = {
         'Content-Disposition': f'attachment; filename="{note.title}.pdf"',
@@ -659,9 +634,14 @@ def delete_note(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    _require_teacher(request)
+    session = _require_teacher(request)
 
-    note = db.query(Note).options(joinedload(Note.versions)).filter(Note.id == note_id).first()
+    note = (
+        db.query(Note)
+        .options(joinedload(Note.versions))
+        .filter(Note.id == note_id, Note.center_id == int(session.get('center_id') or 0))
+        .first()
+    )
     if not note:
         raise HTTPException(status_code=404, detail='Note not found')
 

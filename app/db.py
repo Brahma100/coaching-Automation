@@ -2,7 +2,7 @@ import logging
 import time
 
 from sqlalchemy import create_engine, event
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import Session, declarative_base, sessionmaker, with_loader_criteria
 
 from app.config import settings
 from app.request_context import current_endpoint
@@ -44,3 +44,28 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+@event.listens_for(Session, 'do_orm_execute')
+def _apply_center_tenant_filter(execute_state):
+    if not execute_state.is_select:
+        return
+
+    try:
+        from app.services.center_scope_service import get_current_center_id
+        from app.models import AuthUser, Batch, ClassSession, Note, PendingAction, Student, TeacherBatchMap
+    except Exception:
+        return
+
+    center_id = int(get_current_center_id() or 0)
+    if center_id <= 0:
+        return
+
+    for model in (AuthUser, Batch, Student, ClassSession, TeacherBatchMap, PendingAction, Note):
+        execute_state.statement = execute_state.statement.options(
+            with_loader_criteria(
+                model,
+                lambda cls: cls.center_id == center_id,
+                include_aliases=True,
+            )
+        )

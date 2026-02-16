@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import FeeRecord, ParentStudentMap, StudentRiskProfile
 from app.services.action_token_service import verify_token
 from app.services.attendance_session_service import load_attendance_session_sheet
+from app.services.auth_service import validate_session_token
 
 
 router = APIRouter(prefix='/api/session', tags=['Session Summary API'])
@@ -15,13 +16,28 @@ router = APIRouter(prefix='/api/session', tags=['Session Summary API'])
 @router.get('/summary/{session_id}')
 def session_summary_api(
     session_id: int,
+    request: Request,
     token: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     if not token:
         raise HTTPException(status_code=401, detail='Missing token')
+    session_token = request.cookies.get('auth_session')
+    if not session_token:
+        authorization = request.headers.get('authorization', '')
+        if authorization.lower().startswith('bearer '):
+            session_token = authorization[7:].strip()
+    request_user = validate_session_token(session_token)
     try:
-        payload = verify_token(db, token, expected_action_type='session_summary')
+        payload = verify_token(
+            db,
+            token,
+            expected_action_type='session_summary',
+            request_role=(request_user or {}).get('role'),
+            request_center_id=(request_user or {}).get('center_id'),
+            request_ip=(request.client.host if request.client else ''),
+            request_user_agent=request.headers.get('user-agent', ''),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     if int(payload.get('session_id') or 0) != session_id:

@@ -1,22 +1,22 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.cache import cache, cache_key, cached_view
+from app.core.time_provider import default_time_provider
 from app.db import get_db
 from app.models import PendingAction, Role
-from app.services.action_token_service import create_action_token
 from app.services.auth_service import validate_session_token
 from app.services.inbox_automation import list_inbox_actions
 from app.services.pending_action_service import resolve_action
-from app.frontend_routes import session_summary_url
 
 
 router = APIRouter(prefix='/api/inbox', tags=['Inbox'])
+logger = logging.getLogger(__name__)
 
 
 class ResolvePayload(BaseModel):
@@ -47,22 +47,9 @@ def list_actions(
         raise HTTPException(status_code=403, detail='Unauthorized')
     teacher_id = int(session.get('user_id') or 0)
     rows = list_inbox_actions(db, teacher_id=teacher_id)
-    now = datetime.utcnow()
+    now = default_time_provider.now().replace(tzinfo=None)
     payload = []
     for row in rows:
-        link = None
-        if row.action_type == 'review_session_summary' and row.session_id:
-            token = create_action_token(
-                db=db,
-                action_type='session_summary',
-                payload={
-                    'session_id': row.session_id,
-                    'teacher_id': teacher_id,
-                    'role': 'teacher',
-                },
-                ttl_minutes=24 * 60,
-            )['token']
-            link = session_summary_url(row.session_id, token)
         payload.append(
             {
                 'id': row.id,
@@ -74,10 +61,25 @@ def list_actions(
                 'due_at': row.due_at.isoformat() if row.due_at else None,
                 'created_at': row.created_at.isoformat() if row.created_at else None,
                 'overdue': bool(row.due_at and row.due_at < now),
-                'summary_url': link,
+                'summary_url': None,
+                'needs_token': bool(row.action_type == 'review_session_summary' and row.session_id),
+                'token_type': 'session_summary' if row.action_type == 'review_session_summary' and row.session_id else None,
+                'token_entity_id': int(row.session_id or 0) if row.action_type == 'review_session_summary' and row.session_id else None,
+                'token_command_endpoint': '/api/commands/generate-token' if row.action_type == 'review_session_summary' and row.session_id else None,
+                'token_payload': (
+                    {
+                        'session_id': int(row.session_id or 0),
+                        'teacher_id': teacher_id,
+                        'role': 'teacher',
+                    }
+                    if row.action_type == 'review_session_summary' and row.session_id
+                    else None
+                ),
+                'token_ttl_minutes': 24 * 60 if row.action_type == 'review_session_summary' and row.session_id else None,
                 'note': row.note,
             }
         )
+    logger.warning('read_endpoint_side_effect_removed endpoint=/api/inbox/actions side_effect=summary_token_creation')
     return payload
 
 
@@ -101,12 +103,13 @@ def resolve_action_api(
     resolved = resolve_action(db, action_id, resolution_note=payload.resolution_note)
     actor_teacher_id = int(session.get('user_id') or 0)
     affected_teacher_id = int(row.teacher_id or actor_teacher_id or 0)
-    cache.invalidate(cache_key('inbox', affected_teacher_id))
+    cache.invalidate_prefix('inbox')
     cache.invalidate_prefix('today_view')
-    cache.invalidate(cache_key('admin_ops'))
+    cache.invalidate_prefix('admin_ops')
     return {'ok': True, 'action_id': resolved.id, 'status': resolved.status}
 
 
 def _inbox_key(session: dict | None) -> str:
+    role = (session.get('role') or '').lower() if session else 'unknown'
     teacher_id = int(session.get('user_id') or 0) if session else 0
-    return cache_key('inbox', teacher_id)
+    return cache_key('inbox', f'{role}:{teacher_id}')

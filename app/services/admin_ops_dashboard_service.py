@@ -7,6 +7,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.cache import cache
+from app.core.time_provider import TimeProvider, default_time_provider
 from app.models import (
     AttendanceRecord,
     AuthUser,
@@ -61,10 +62,15 @@ _AUTOMATION_JOBS = [
 
 
 def clear_admin_ops_cache() -> None:
-    cache.invalidate('admin_ops')
+    cache.invalidate_prefix('admin_ops')
+
+
+def _warn_missing_center_filter(*, query_name: str) -> None:
+    logger.warning('center_filter_missing service=admin_ops_dashboard query=%s', query_name)
 
 
 def _last_comm_log(db: Session, notification_type: str) -> datetime | None:
+    _warn_missing_center_filter(query_name='communication_log_last_comm')
     return (
         db.query(func.max(CommunicationLog.created_at))
         .filter(CommunicationLog.notification_type == notification_type)
@@ -72,7 +78,7 @@ def _last_comm_log(db: Session, notification_type: str) -> datetime | None:
     )
 
 
-def _build_system_alerts(db: Session, now: datetime) -> list[dict]:
+def _build_system_alerts(db: Session, now: datetime, *, center_id: int) -> list[dict]:
     alerts: list[dict] = []
 
     overdue_cutoff = now - timedelta(hours=_OVERDUE_ALERT_HOURS)
@@ -82,6 +88,7 @@ def _build_system_alerts(db: Session, now: datetime) -> list[dict]:
             PendingAction.status == 'open',
             PendingAction.due_at.is_not(None),
             PendingAction.due_at < overdue_cutoff,
+            PendingAction.center_id == center_id,
         )
         .all()
     )
@@ -104,7 +111,7 @@ def _build_system_alerts(db: Session, now: datetime) -> list[dict]:
         )
 
     yesterday = (now - timedelta(days=1)).date()
-    gaps = _attendance_gaps_for_day(db, target_date=yesterday)
+    gaps = _attendance_gaps_for_day(db, target_date=yesterday, center_id=center_id)
     if gaps:
         sample = ', '.join([g['batch_name'] for g in gaps[:3]])
         suffix = '...' if len(gaps) > 3 else ''
@@ -119,6 +126,7 @@ def _build_system_alerts(db: Session, now: datetime) -> list[dict]:
             }
         )
 
+    _warn_missing_center_filter(query_name='communication_log_failures')
     failure_since = now - timedelta(hours=24)
     failed_rows = (
         db.query(
@@ -162,12 +170,12 @@ def _build_system_alerts(db: Session, now: datetime) -> list[dict]:
     return alerts
 
 
-def _attendance_gaps_for_day(db: Session, *, target_date: date) -> list[dict]:
+def _attendance_gaps_for_day(db: Session, *, target_date: date, center_id: int) -> list[dict]:
     weekday = target_date.weekday()
     schedules = (
         db.query(BatchSchedule, Batch)
         .join(Batch, Batch.id == BatchSchedule.batch_id)
-        .filter(BatchSchedule.weekday == weekday, Batch.active.is_(True))
+        .filter(BatchSchedule.weekday == weekday, Batch.active.is_(True), Batch.center_id == center_id)
         .all()
     )
     if not schedules:
@@ -182,6 +190,7 @@ def _attendance_gaps_for_day(db: Session, *, target_date: date) -> list[dict]:
             ClassSession.batch_id.in_(batch_ids),
             ClassSession.scheduled_start >= day_start,
             ClassSession.scheduled_start <= day_end,
+            ClassSession.center_id == center_id,
         )
         .all()
     )
@@ -203,10 +212,10 @@ def _attendance_gaps_for_day(db: Session, *, target_date: date) -> list[dict]:
     return gaps
 
 
-def _build_teacher_bottlenecks(db: Session, now: datetime) -> list[dict]:
+def _build_teacher_bottlenecks(db: Session, now: datetime, *, center_id: int) -> list[dict]:
     open_actions = (
         db.query(PendingAction)
-        .filter(PendingAction.status == 'open', PendingAction.teacher_id.is_not(None))
+        .filter(PendingAction.status == 'open', PendingAction.teacher_id.is_not(None), PendingAction.center_id == center_id)
         .all()
     )
     overdue_by_teacher: dict[int, list[PendingAction]] = {}
@@ -228,6 +237,7 @@ def _build_teacher_bottlenecks(db: Session, now: datetime) -> list[dict]:
             ClassSession.scheduled_start >= day_start,
             ClassSession.scheduled_start <= day_end,
             ClassSession.status.not_in(['submitted', 'closed']),
+            ClassSession.center_id == center_id,
         )
         .group_by(ClassSession.teacher_id)
         .all()
@@ -238,7 +248,7 @@ def _build_teacher_bottlenecks(db: Session, now: datetime) -> list[dict]:
     if not teacher_ids:
         return []
 
-    teachers = db.query(AuthUser).filter(AuthUser.id.in_(teacher_ids)).all()
+    teachers = db.query(AuthUser).filter(AuthUser.id.in_(teacher_ids), AuthUser.center_id == center_id).all()
     teacher_map = {row.id: row for row in teachers}
 
     payload = []
@@ -265,8 +275,8 @@ def _build_teacher_bottlenecks(db: Session, now: datetime) -> list[dict]:
     return payload
 
 
-def _build_batch_health(db: Session, now: datetime) -> list[dict]:
-    active_batches = db.query(Batch).filter(Batch.active.is_(True)).all()
+def _build_batch_health(db: Session, now: datetime, *, center_id: int) -> list[dict]:
+    active_batches = db.query(Batch).filter(Batch.active.is_(True), Batch.center_id == center_id).all()
     if not active_batches:
         return []
 
@@ -295,6 +305,7 @@ def _build_batch_health(db: Session, now: datetime) -> list[dict]:
             ClassSession.batch_id.in_(batch_ids),
             ClassSession.scheduled_start >= datetime.combine(start_date, time.min),
             ClassSession.scheduled_start <= datetime.combine(end_date, time.max),
+            ClassSession.center_id == center_id,
         )
         .all()
     )
@@ -306,16 +317,17 @@ def _build_batch_health(db: Session, now: datetime) -> list[dict]:
         if scheduled_start and (batch_id not in last_class_by_batch or scheduled_start > last_class_by_batch[batch_id]):
             last_class_by_batch[batch_id] = scheduled_start
 
-    recent_absent = _absent_counts_by_batch(db, start_date, end_date)
+    recent_absent = _absent_counts_by_batch(db, start_date, end_date, center_id=center_id)
     prev_start = start_date - timedelta(days=_ATTENDANCE_WINDOW_DAYS)
     prev_end = start_date - timedelta(days=1)
-    previous_absent = _absent_counts_by_batch(db, prev_start, prev_end)
+    previous_absent = _absent_counts_by_batch(db, prev_start, prev_end, center_id=center_id)
 
     fee_due = (
         db.query(Student.batch_id, func.count(func.distinct(FeeRecord.student_id)))
         .join(Student, Student.id == FeeRecord.student_id)
         .filter(
             Student.batch_id.in_(batch_ids),
+            Student.center_id == center_id,
             FeeRecord.is_paid.is_(False),
             (FeeRecord.amount - FeeRecord.paid_amount) > 0,
         )
@@ -324,7 +336,7 @@ def _build_batch_health(db: Session, now: datetime) -> list[dict]:
     )
     fee_due_by_batch = {int(batch_id): int(count) for batch_id, count in fee_due}
 
-    repeat_absentees = _repeat_absentees_by_batch(db, start_date, end_date)
+    repeat_absentees = _repeat_absentees_by_batch(db, start_date, end_date, center_id=center_id)
 
     payload = []
     for batch in active_batches:
@@ -367,7 +379,7 @@ def _build_batch_health(db: Session, now: datetime) -> list[dict]:
     return payload
 
 
-def _absent_counts_by_batch(db: Session, start: date, end: date) -> dict[int, int]:
+def _absent_counts_by_batch(db: Session, start: date, end: date, *, center_id: int) -> dict[int, int]:
     rows = (
         db.query(Student.batch_id, func.count(AttendanceRecord.id))
         .join(AttendanceRecord, AttendanceRecord.student_id == Student.id)
@@ -375,6 +387,7 @@ def _absent_counts_by_batch(db: Session, start: date, end: date) -> dict[int, in
             AttendanceRecord.attendance_date >= start,
             AttendanceRecord.attendance_date <= end,
             AttendanceRecord.status == 'Absent',
+            Student.center_id == center_id,
         )
         .group_by(Student.batch_id)
         .all()
@@ -382,7 +395,7 @@ def _absent_counts_by_batch(db: Session, start: date, end: date) -> dict[int, in
     return {int(batch_id): int(count) for batch_id, count in rows if batch_id is not None}
 
 
-def _repeat_absentees_by_batch(db: Session, start: date, end: date) -> dict[int, int]:
+def _repeat_absentees_by_batch(db: Session, start: date, end: date, *, center_id: int) -> dict[int, int]:
     subquery = (
         db.query(
             Student.id.label('student_id'),
@@ -394,6 +407,7 @@ def _repeat_absentees_by_batch(db: Session, start: date, end: date) -> dict[int,
             AttendanceRecord.attendance_date >= start,
             AttendanceRecord.attendance_date <= end,
             AttendanceRecord.status == 'Absent',
+            Student.center_id == center_id,
         )
         .group_by(Student.id, Student.batch_id)
         .having(func.count(AttendanceRecord.id) >= 2)
@@ -403,10 +417,20 @@ def _repeat_absentees_by_batch(db: Session, start: date, end: date) -> dict[int,
     return {int(batch_id): int(count) for batch_id, count in rows if batch_id is not None}
 
 
-def _build_student_risk_summary(db: Session, now: datetime) -> dict:
-    high_risk = db.query(StudentRiskProfile).filter(StudentRiskProfile.risk_level == 'HIGH').count()
+def _build_student_risk_summary(db: Session, now: datetime, *, center_id: int) -> dict:
+    high_risk = (
+        db.query(StudentRiskProfile)
+        .join(Student, Student.id == StudentRiskProfile.student_id)
+        .filter(StudentRiskProfile.risk_level == 'HIGH', Student.center_id == center_id)
+        .count()
+    )
     week_start = now - timedelta(days=7)
-    new_risks = db.query(StudentRiskEvent).filter(StudentRiskEvent.created_at >= week_start).count()
+    new_risks = (
+        db.query(StudentRiskEvent)
+        .join(Student, Student.id == StudentRiskEvent.student_id)
+        .filter(StudentRiskEvent.created_at >= week_start, Student.center_id == center_id)
+        .count()
+    )
 
     attendance_start = now.date() - timedelta(days=_LOW_ATTENDANCE_WINDOW_DAYS)
     attendance_rows = (
@@ -415,9 +439,11 @@ def _build_student_risk_summary(db: Session, now: datetime) -> dict:
             func.count(AttendanceRecord.id).label('total'),
             func.sum(case((AttendanceRecord.status == 'Present', 1), else_=0)).label('present'),
         )
+        .join(Student, Student.id == AttendanceRecord.student_id)
         .filter(
             AttendanceRecord.attendance_date >= attendance_start,
             AttendanceRecord.attendance_date <= now.date(),
+            Student.center_id == center_id,
         )
         .group_by(AttendanceRecord.student_id)
         .all()
@@ -441,6 +467,7 @@ def _build_student_risk_summary(db: Session, now: datetime) -> dict:
 
 
 def _build_automation_health(db: Session, now: datetime) -> dict:
+    _warn_missing_center_filter(query_name='communication_log_automation_health')
     items = []
     for job in _AUTOMATION_JOBS:
         last_run = _last_comm_log(db, job['notification_type'])
@@ -464,8 +491,17 @@ def _build_automation_health(db: Session, now: datetime) -> dict:
 
 
 @timed_service('admin_ops_dashboard')
-def get_admin_ops_dashboard(db: Session, *, now: datetime | None = None) -> dict:
-    now = now or datetime.utcnow()
+def get_admin_ops_dashboard(
+    db: Session,
+    *,
+    center_id: int,
+    now: datetime | None = None,
+    time_provider: TimeProvider = default_time_provider,
+) -> dict:
+    center_id = int(center_id or 0)
+    if center_id <= 0:
+        raise ValueError('center_id is required')
+    now = now or time_provider.now().replace(tzinfo=None)
     payload = {
         'system_alerts': [],
         'teacher_bottlenecks': [],
@@ -476,22 +512,22 @@ def get_admin_ops_dashboard(db: Session, *, now: datetime | None = None) -> dict
     }
 
     try:
-        payload['system_alerts'] = _build_system_alerts(db, now)
+        payload['system_alerts'] = _build_system_alerts(db, now, center_id=center_id)
     except Exception:
         logger.exception('admin_ops_system_alerts_failed')
 
     try:
-        payload['teacher_bottlenecks'] = _build_teacher_bottlenecks(db, now)
+        payload['teacher_bottlenecks'] = _build_teacher_bottlenecks(db, now, center_id=center_id)
     except Exception:
         logger.exception('admin_ops_teacher_bottlenecks_failed')
 
     try:
-        payload['batch_health'] = _build_batch_health(db, now)
+        payload['batch_health'] = _build_batch_health(db, now, center_id=center_id)
     except Exception:
         logger.exception('admin_ops_batch_health_failed')
 
     try:
-        payload['student_risk_summary'] = _build_student_risk_summary(db, now)
+        payload['student_risk_summary'] = _build_student_risk_summary(db, now, center_id=center_id)
     except Exception:
         logger.exception('admin_ops_student_risk_failed')
 

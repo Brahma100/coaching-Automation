@@ -153,8 +153,8 @@ class InboxAutomationTests(unittest.TestCase):
             db.commit()
 
             with patch('app.services.comms_service.send_telegram_message_with_id', return_value=(True, 111)):
-                send_inbox_escalations(db)
-                send_inbox_escalations(db)
+                send_inbox_escalations(db, center_id=1)
+                send_inbox_escalations(db, center_id=1)
 
             logs = db.query(CommunicationLog).filter(
                 CommunicationLog.notification_type == 'inbox_escalation'
@@ -203,7 +203,7 @@ class InboxAutomationTests(unittest.TestCase):
             db.commit()
 
             with patch('app.services.comms_service.send_telegram_message_with_id', return_value=(True, 111)):
-                send_inbox_escalations(db)
+                send_inbox_escalations(db, center_id=1)
 
             refreshed = db.query(PendingAction).filter(PendingAction.id == action.id).first()
             self.assertIsNone(refreshed.escalation_sent_at)

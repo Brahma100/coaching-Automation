@@ -1,9 +1,10 @@
 import React from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { Navigate, useRoutes } from 'react-router-dom';
 
 import PageLoader from './components/ui/PageLoader.jsx';
 import GlobalToastHost from './components/ui/GlobalToastHost.jsx';
-import { setGlobalApiErrorNotifier } from './services/api';
+import { clearToastEvent } from './store/slices/appSlice.js';
 
 const ProtectedRoute = React.lazy(() => import('./components/guards/ProtectedRoute.jsx'));
 const StudentProtectedRoute = React.lazy(() => import('./components/guards/StudentProtectedRoute.jsx'));
@@ -16,15 +17,22 @@ const Attendance = React.lazy(() => import('./pages/Attendance.jsx'));
 const AttendanceToken = React.lazy(() => import('./pages/AttendanceToken.jsx'));
 const ClassStartToken = React.lazy(() => import('./pages/ClassStartToken.jsx'));
 const Dashboard = React.lazy(() => import('./pages/Dashboard.jsx'));
+const Brain = React.lazy(() => import('./pages/Brain.jsx'));
 const Today = React.lazy(() => import('./pages/Today.jsx'));
 const TeacherCalendar = React.lazy(() => import('./pages/TeacherCalendar.jsx'));
+const TimeCapacity = React.lazy(() => import('./pages/TimeCapacity.jsx'));
 const Fees = React.lazy(() => import('./pages/Fees.jsx'));
 const Homework = React.lazy(() => import('./pages/Homework.jsx'));
 const Notes = React.lazy(() => import('./pages/Notes.jsx'));
 const Login = React.lazy(() => import('./pages/Login.jsx'));
 const Signup = React.lazy(() => import('./pages/Signup.jsx'));
+const Onboard = React.lazy(() => import('./pages/Onboard.jsx'));
+const Welcome = React.lazy(() => import('./pages/Welcome.jsx'));
 const Risk = React.lazy(() => import('./pages/Risk.jsx'));
 const Settings = React.lazy(() => import('./pages/Settings.jsx'));
+const CommunicationSettings = React.lazy(() => import('./pages/CommunicationSettings.jsx'));
+const AutomationRulesSettings = React.lazy(() => import('./pages/AutomationRulesSettings.jsx'));
+const Integrations = React.lazy(() => import('./pages/Integrations.jsx'));
 const Students = React.lazy(() => import('./pages/Students.jsx'));
 const SessionSummaryToken = React.lazy(() => import('./pages/SessionSummaryToken.jsx'));
 const Batches = React.lazy(() => import('./pages/Batches.jsx'));
@@ -36,23 +44,13 @@ const redirectDashboard = React.createElement(Navigate, { to: '/dashboard', repl
 const redirectLogin = React.createElement(Navigate, { to: '/login', replace: true });
 
 function App() {
-  const [toastEvent, setToastEvent] = React.useState(null);
-
-  React.useEffect(() => {
-    setGlobalApiErrorNotifier((payload) => {
-      setToastEvent({
-        tone: payload?.tone || 'error',
-        message: payload?.message || 'Request failed',
-        duration: payload?.duration || 5000,
-        nonce: Date.now(),
-      });
-    });
-    return () => setGlobalApiErrorNotifier(null);
-  }, []);
+  const dispatch = useDispatch();
+  const toastEvent = useSelector((state) => state?.app?.toastEvent || null);
 
   const routes = useRoutes([
     { path: '/login', element: page(Login) },
     { path: '/signup', element: page(Signup) },
+    { path: '/onboard', element: page(Onboard) },
     { path: '/attendance/session/:sessionId', element: React.createElement(AttendanceToken, { expectedType: 'attendance_open' }) },
     { path: '/attendance/review/:sessionId', element: React.createElement(AttendanceToken, { expectedType: 'attendance_review', showCountdown: true }) },
     { path: '/class/start/:sessionId', element: page(ClassStartToken) },
@@ -74,8 +72,11 @@ function App() {
           children: [
             { path: '/', element: redirectDashboard },
             { path: '/dashboard', element: page(Dashboard) },
+            { path: '/brain', element: page(Brain) },
+            { path: '/welcome', element: page(Welcome) },
             { path: '/today', element: page(Today) },
             { path: '/calendar', element: page(TeacherCalendar) },
+            { path: '/time-capacity', element: page(TimeCapacity) },
             { path: '/students', element: page(Students) },
             { path: '/batches', element: page(Batches) },
             { path: '/attendance', element: page(Attendance) },
@@ -84,7 +85,10 @@ function App() {
             { path: '/notes', element: page(Notes) },
             { path: '/actions', element: page(Actions) },
             { path: '/risk', element: page(Risk) },
-            { path: '/settings', element: page(Settings) }
+            { path: '/settings', element: page(Settings) },
+            { path: '/settings/communication', element: page(CommunicationSettings) },
+            { path: '/settings/automation-rules', element: page(AutomationRulesSettings) },
+            { path: '/settings/integrations', element: page(Integrations) }
           ]
         }
       ]
@@ -111,7 +115,7 @@ function App() {
     ),
     React.createElement(GlobalToastHost, {
       event: toastEvent,
-      onDone: () => setToastEvent(null),
+      onDone: () => dispatch(clearToastEvent()),
     })
   );
 }

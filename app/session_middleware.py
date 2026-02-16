@@ -1,5 +1,6 @@
 from urllib.parse import quote
 
+from fastapi.responses import JSONResponse
 from fastapi.responses import RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -21,6 +22,9 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
         )
 
     async def dispatch(self, request: Request, call_next):
+        return await self._dispatch_with_scope(request, call_next)
+
+    async def _dispatch_with_scope(self, request: Request, call_next):
         path = request.url.path
         if not path.startswith('/ui'):
             return await call_next(request)
@@ -34,6 +38,14 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
             next_url = quote(path, safe='/')
             return RedirectResponse(url=f'/ui/login?next={next_url}', status_code=303)
 
+        request_center_id = int(getattr(request.state, 'center_id', 0) or 0)
+        session_center_id = int(session.get('center_id') or 0)
+        if request_center_id > 0 and session_center_id > 0 and request_center_id != session_center_id:
+            return JSONResponse(status_code=403, content={'detail': 'Center mismatch'})
+
+        return await self._dispatch_authorized(request, call_next, path, session)
+
+    async def _dispatch_authorized(self, request: Request, call_next, path: str, session: dict):
         if path.startswith('/ui/student'):
             if session['role'] != Role.STUDENT.value:
                 return RedirectResponse(url='/ui/login', status_code=303)

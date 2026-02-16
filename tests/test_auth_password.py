@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -8,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base, get_db
-from app.models import AllowedUser, AllowedUserStatus, Role
+from app.models import AllowedUser, AllowedUserStatus, AuthUser, Role
 from app.routers import auth
 
 
@@ -64,6 +65,14 @@ class AuthPasswordTests(unittest.TestCase):
         self.assertEqual(login.status_code, 200)
         self.assertTrue(login.json().get('ok'))
 
+    def test_login_password_accepts_country_code_variant(self):
+        signup = self.client.post('/auth/signup-password', json={'phone': '9000000001', 'password': 'Password@123'})
+        self.assertEqual(signup.status_code, 200)
+
+        login = self.client.post('/auth/login-password', json={'phone': '+919000000001', 'password': 'Password@123'})
+        self.assertEqual(login.status_code, 200)
+        self.assertTrue(login.json().get('ok'))
+
     def test_disabled_allowlist_denied(self):
         signup = self.client.post('/auth/signup-password', json={'phone': '9000000002', 'password': 'Password@123'})
         self.assertEqual(signup.status_code, 403)
@@ -71,6 +80,24 @@ class AuthPasswordTests(unittest.TestCase):
     def test_google_not_configured(self):
         response = self.client.post('/auth/google-login', json={'id_token': 'dummy'})
         self.assertEqual(response.status_code, 501)
+
+    def test_request_otp_uses_gateway_delivery(self):
+        db = self._session_factory()
+        try:
+            user = db.query(AuthUser).filter(AuthUser.phone == '9000000001').first()
+            if not user:
+                user = AuthUser(phone='9000000001', role=Role.TEACHER.value)
+                db.add(user)
+            user.telegram_chat_id = 'chat-otp-1'
+            db.commit()
+        finally:
+            db.close()
+
+        with patch('app.services.auth_service.gateway_send_event', return_value=[{'ok': True, 'status': 'sent'}]) as gateway_send:
+            response = self.client.post('/auth/request-otp', json={'phone': '9000000001'})
+
+        self.assertEqual(response.status_code, 200)
+        gateway_send.assert_called_once()
 
 
 if __name__ == '__main__':

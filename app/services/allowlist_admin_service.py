@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from app.core.phone import normalize_phone as _core_normalize_phone
 from app.models import AllowedUser, AllowedUserStatus, Role
 from app.services.auth_service import validate_session_token
 
 
 def normalize_phone(value: str) -> str:
-    return ''.join(ch for ch in (value or '') if ch.isdigit())
+    # DEPRECATED: use app.core.phone.normalize_phone directly.
+    return _core_normalize_phone(value)
 
 
 def _normalize_role_input(role: str) -> str:

@@ -1,40 +1,32 @@
 import React from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { useParams, useSearchParams } from 'react-router-dom';
 
 import { InlineSkeletonText } from '../components/Skeleton.jsx';
 import TokenGate from '../components/TokenGate.jsx';
-import { fetchSessionSummary } from '../services/api';
+import {
+  loadRequested,
+  resetState,
+} from '../store/slices/sessionSummaryTokenSlice.js';
 
 function SessionSummaryToken() {
+  const dispatch = useDispatch();
   const params = useParams();
   const [searchParams] = useSearchParams();
   const token = searchParams.get('token') || '';
   const sessionId = params.sessionId;
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState('');
-  const [summary, setSummary] = React.useState(null);
+  const { loading, error, summary } = useSelector((state) => state.sessionSummaryToken || {});
 
-  const loadSummary = React.useCallback(async () => {
-    if (!sessionId || !token) return;
-    setLoading(true);
-    try {
-      const payload = await fetchSessionSummary(sessionId, token);
-      setSummary(payload || null);
-      setError('');
-    } catch (err) {
-      setSummary(null);
-      setError(err?.response?.data?.detail || err?.message || 'Session summary unavailable.');
-    } finally {
-      setLoading(false);
-    }
-  }, [sessionId, token]);
+  React.useEffect(() => {
+    dispatch(resetState());
+  }, [dispatch, sessionId, token]);
 
   return (
     <TokenGate
       token={token}
       sessionId={sessionId}
       expectedType="session_summary"
-      onValid={() => loadSummary()}
+      onValid={() => dispatch(loadRequested({ sessionId, token }))}
     >
       {() => (
         <section className="space-y-4 p-6">

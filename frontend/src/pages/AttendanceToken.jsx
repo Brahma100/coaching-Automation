@@ -1,20 +1,19 @@
 import React from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { useParams, useSearchParams } from 'react-router-dom';
 
 import { InlineSkeletonText } from '../components/Skeleton.jsx';
 import TokenGate from '../components/TokenGate.jsx';
-import { fetchAttendanceSession, submitAttendanceSession } from '../services/api';
+import {
+  loadRequested,
+  resetForTokenChange,
+  rowChanged,
+  submitRequested,
+  tokenValidated,
+} from '../store/slices/attendanceTokenSlice.js';
 
 function normalizeList(value) {
   return Array.isArray(value) ? value : [];
-}
-
-function normalizeStatus(value) {
-  const raw = String(value || '').trim().toLowerCase();
-  if (raw === 'present') return 'Present';
-  if (raw === 'absent') return 'Absent';
-  if (raw === 'late') return 'Late';
-  return 'Present';
 }
 
 function formatCountdown(expiresAt) {
@@ -28,78 +27,40 @@ function formatCountdown(expiresAt) {
 }
 
 function AttendanceToken({ expectedType, showCountdown = false }) {
+  const dispatch = useDispatch();
   const params = useParams();
   const [searchParams] = useSearchParams();
   const token = searchParams.get('token') || '';
   const sessionId = params.sessionId;
-
-  const [loadingSheet, setLoadingSheet] = React.useState(true);
-  const [sheet, setSheet] = React.useState(null);
-  const [rows, setRows] = React.useState([]);
-  const [error, setError] = React.useState('');
-  const [submitting, setSubmitting] = React.useState(false);
-  const [expiresAt, setExpiresAt] = React.useState('');
-  const [tokenValid, setTokenValid] = React.useState(false);
-  const [submitted, setSubmitted] = React.useState(false);
+  const {
+    loadingSheet,
+    sheet,
+    rows,
+    error,
+    submitting,
+    expiresAt,
+    tokenValid,
+    submitted,
+  } = useSelector((state) => state.attendanceToken || {});
 
   React.useEffect(() => {
-    setTokenValid(false);
-    if (expectedType === 'attendance_open') {
-      setSubmitted(false);
-      setSheet(null);
-      setRows([]);
-      setError('');
-    }
-  }, [token, sessionId, expectedType]);
-
-  const loadSessionSheet = React.useCallback(async () => {
-    if (!sessionId || !token) return;
-    setLoadingSheet(true);
-    try {
-      const payload = await fetchAttendanceSession(sessionId, token);
-      setSheet(payload || null);
-      setRows(normalizeList(payload?.rows));
-      setError('');
-    } catch (err) {
-      setSheet(null);
-      setRows([]);
-      setError(err?.response?.data?.detail || err?.message || 'Failed to load attendance sheet');
-    } finally {
-      setLoadingSheet(false);
-    }
-  }, [sessionId, token]);
+    dispatch(resetForTokenChange());
+  }, [dispatch, token, sessionId, expectedType]);
 
   const onChangeRow = (studentId, field, value) => {
-    setRows((prev) =>
-      prev.map((row) => (row.student_id === studentId ? { ...row, [field]: value } : row))
-    );
+    dispatch(rowChanged({ studentId, field, value }));
   };
 
-  const onSubmit = async () => {
+  const onSubmit = () => {
     if (!sessionId || !sheet?.can_edit) return;
-    setSubmitting(true);
-    try {
-      await submitAttendanceSession(Number(sessionId), {
-        token: token || null,
-        records: rows.map((row) => ({
-          student_id: row.student_id,
-          status: normalizeStatus(row.status),
-          comment: row.comment || ''
-        }))
-      });
-      setSubmitted(true);
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Failed to submit attendance');
-    } finally {
-      setSubmitting(false);
-    }
+    dispatch(submitRequested({ sessionId, token }));
   };
 
   React.useEffect(() => {
     if (tokenValid) {
-      loadSessionSheet();
+      dispatch(loadRequested({ sessionId, token }));
     }
-  }, [tokenValid, loadSessionSheet]);
+  }, [dispatch, tokenValid, sessionId, token]);
 
   return (
     <TokenGate
@@ -107,8 +68,7 @@ function AttendanceToken({ expectedType, showCountdown = false }) {
       sessionId={sessionId}
       expectedType={expectedType}
       onValid={(info) => {
-        setTokenValid(true);
-        if (info?.expires_at) setExpiresAt(info.expires_at);
+        dispatch(tokenValidated({ expiresAt: info?.expires_at || '' }));
       }}
     >
       {() => {

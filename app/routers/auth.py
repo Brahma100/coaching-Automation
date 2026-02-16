@@ -14,6 +14,7 @@ from app.services.auth_service import (
     signup_password,
     verify_otp,
 )
+from app.services.rate_limit_service import SafeRateLimitError
 
 
 templates = Jinja2Templates(directory='app/ui/templates')
@@ -62,6 +63,8 @@ def auth_request_otp(payload: OtpRequestPayload, db: Session = Depends(get_db)):
     try:
         data = request_otp(db, payload.phone)
         return data
+    except SafeRateLimitError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except AuthAuthorizationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:

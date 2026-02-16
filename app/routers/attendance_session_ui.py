@@ -7,11 +7,13 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
+from app.core.attendance_guards import extract_session_token as _core_extract_session_token
 from app.db import get_db
+from app.domain.services.attendance_service import submit_attendance as domain_submit_attendance
 from app.models import Role
 from app.schemas import AttendanceItem
-from app.services.action_token_service import verify_and_consume_token, verify_token
-from app.services.attendance_session_service import load_attendance_session_sheet, submit_attendance_for_session
+from app.services.action_token_service import consume_token, verify_token
+from app.services.attendance_session_service import load_attendance_session_sheet
 from app.services.auth_service import validate_session_token
 
 
@@ -21,13 +23,8 @@ router = APIRouter(prefix='/ui/attendance', tags=['UI Attendance'])
 
 
 def _extract_session_token(request: Request) -> str | None:
-    cookie_token = request.cookies.get('auth_session')
-    if cookie_token:
-        return cookie_token
-    auth_header = request.headers.get('Authorization', '')
-    if auth_header.lower().startswith('bearer '):
-        return auth_header.split(' ', 1)[1].strip()
-    return None
+    # DEPRECATED: use app.core.attendance_guards.extract_session_token directly.
+    return _core_extract_session_token(request)
 
 
 def _authorize(
@@ -35,14 +32,16 @@ def _authorize(
     request: Request,
     session_id: int,
     token: str | None,
-    consume_token: bool,
 ) -> dict:
     if token:
         try:
-            payload = (
-                verify_and_consume_token(db, token, expected_action_type='attendance-session')
-                if consume_token
-                else verify_token(db, token, expected_action_type='attendance-session')
+            payload = verify_token(
+                db,
+                token,
+                expected_action_type='attendance-session',
+                request_role=Role.TEACHER.value,
+                request_ip=(request.client.host if request.client else ''),
+                request_user_agent=request.headers.get('user-agent', ''),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -78,7 +77,7 @@ def attendance_session_page(
     error: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    access = _authorize(db, request, session_id, token=token, consume_token=False)
+    access = _authorize(db, request, session_id, token=token)
     sheet = load_attendance_session_sheet(db, session_id)
     can_edit = (not sheet['locked']) or access['role'] == Role.ADMIN.value
     return templates.TemplateResponse(
@@ -109,7 +108,7 @@ def attendance_session_submit(
     db: Session = Depends(get_db),
 ):
     token_value = token.strip() or None
-    access = _authorize(db, request, session_id, token=token_value, consume_token=bool(token_value))
+    access = _authorize(db, request, session_id, token=token_value)
 
     student_ids = student_id or []
     statuses = status or []
@@ -127,13 +126,16 @@ def attendance_session_submit(
 
     try:
         records = [AttendanceItem(student_id=sid, status=st, comment=cm).model_dump() for sid, st, cm in zip(student_ids, statuses, comments)]
-        submit_attendance_for_session(
+        domain_submit_attendance(
             db=db,
             session_id=session_id,
             records=records,
-            actor_role=access['role'],
+            actor_role=Role.TEACHER.value if access.get('token_used') else access['role'],
             teacher_id=access['teacher_id'],
+            allow_edit_submitted=bool(access.get('token_used')),
         )
+        if token_value:
+            consume_token(db, token_value)
     except PermissionError as exc:
         if token_value:
             raise HTTPException(status_code=403, detail=str(exc)) from exc

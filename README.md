@@ -32,7 +32,7 @@ APIs:
 Risk is advisory, not disciplinary.
 
 ## Quick Start
-1. `python -m venv .venv`
+1. `python -m venv .venv` 
 2. `.venv\\Scripts\\activate`
 3. `pip install -r requirements.txt`
 4. Copy `.env.example` to `.env`
@@ -41,6 +41,14 @@ Risk is advisory, not disciplinary.
 7. `uvicorn app.main:app --reload`
 
 Docs: `/docs`, `/redoc`; UI: `/ui/dashboard`
+
+## Communication Mode
+Hybrid communication supports two runtime modes:
+1. `COMMUNICATION_MODE=embedded` to use local in-process communication dispatch.
+2. `COMMUNICATION_MODE=remote` to use the communication microservice over HTTP.
+
+Required env for remote mode:
+1. `COMMUNICATION_SERVICE_URL=http://localhost:9000`
 
 ## Frontend URL (React)
 All Telegram notifications link to the React frontend, not `/ui/*` routes.
@@ -199,10 +207,62 @@ Students can toggle:
 Notes:
 1. OTP expiry default is 10 minutes (`AUTH_OTP_EXPIRY_MINUTES`).
 2. Session expiry default is 12 hours (`AUTH_SESSION_EXPIRY_HOURS`).
-3. If no parent Telegram mapping exists for the phone, set `AUTH_OTP_FALLBACK_CHAT_ID`.
-4. OTP verifies identity; allowlist verifies permission.
-5. Role in session is sourced from `allowed_users.role` (not from OTP request payload).
-6. There is no public signup.
+3. OTP is delivered to the linked Telegram `chat_id` for that phone.
+4. If a number is not linked, OTP request returns: `Your number is not linked to Telegram. Please link Telegram first from Settings.`
+5. Fallback chat (`AUTH_OTP_FALLBACK_CHAT_ID`) is used only when no auth user exists for that phone (legacy bootstrap cases).
+6. Telegram link UI banner is shown on the dashboard when the account is not linked.
+7. Link APIs:
+   - `GET /api/telegram/link/status`
+   - `POST /api/telegram/link/start`
+   - `POST /api/telegram/link/webhook` (Telegram bot webhook target)
+8. OTP verifies identity; allowlist verifies permission.
+9. Role in session is sourced from `allowed_users.role` (not from OTP request payload).
+10. There is no public signup.
+
+## Telegram Linking Setup
+Goal:
+Receive Telegram bot updates and auto-link `phone -> telegram_chat_id` when users click `Link Telegram`.
+
+Required env:
+1. `TELEGRAM_BOT_TOKEN` (required)
+2. `TELEGRAM_BOT_USERNAME` (optional, auto-resolved from bot token if empty)
+3. `TELEGRAM_WEBHOOK_SECRET` (recommended in webhook mode)
+4. `TELEGRAM_LINK_POLLING_MODE` (`auto` | `on` | `off`, default `auto`)
+5. `TELEGRAM_LINK_POLLING_INTERVAL_SECONDS` (default `20`)
+
+Mode behavior:
+1. `TELEGRAM_LINK_POLLING_MODE=auto`:
+   - If Telegram webhook URL is configured, polling is disabled.
+   - If no webhook URL is configured, polling is enabled automatically.
+2. `TELEGRAM_LINK_POLLING_MODE=on`: always poll with `getUpdates`.
+3. `TELEGRAM_LINK_POLLING_MODE=off`: never poll (webhook only).
+
+No-domain/local development:
+1. Keep `TELEGRAM_LINK_POLLING_MODE=auto` or `on`.
+2. Do not configure webhook.
+3. Start backend; scheduler polls Telegram every configured interval.
+4. User clicks `Link Telegram` in UI, opens bot, taps `START`.
+5. Bot replies and chat id is stored in `auth_users.telegram_chat_id`.
+
+Telegram `/start` behavior (known users only):
+1. Plain `/start` prompts user to share phone contact in Telegram.
+2. On contact share, backend verifies the phone exists in at least one known table:
+   - `auth_users.phone` (Teacher/Admin/Student auth)
+   - `students.guardian_phone`
+   - `parents.phone`
+3. If known:
+   - Link `chat_id` to all matching known rows (`auth_users.telegram_chat_id`, `students.telegram_chat_id`, `parents.telegram_chat_id`).
+   - Send welcome message with matched role/record summary.
+4. If not known:
+   - Reply: `Please connect with Admin for registration.`
+5. For already-linked chats, `/start` directly returns welcome/summary.
+
+Production (recommended webhook push):
+1. Expose backend on public HTTPS.
+2. Set webhook URL to: `https://<host>/api/telegram/link/webhook`
+3. Set `TELEGRAM_WEBHOOK_SECRET` and register same `secret_token` on Telegram webhook.
+4. Set `TELEGRAM_LINK_POLLING_MODE=auto` or `off`.
+5. In `auto`, polling remains disabled when webhook is configured.
 
 React auth pages:
 1. `/login`: OTP login + Password login + Google button.
@@ -512,3 +572,49 @@ Restore approach:
 1. Stop the app.
 2. Replace current SQLite file with downloaded backup file.
 3. Start app and run `alembic upgrade head` to ensure schema is up to date.
+
+## Time & Capacity Engine
+
+Additive module for teacher/admin planning with no changes to existing calendar, notes, attendance, or automation endpoints.
+
+### Overview
+
+Features:
+1. Daily availability with free/busy/blocked slots from class sessions, schedule overrides, and teacher personal blocks.
+2. Batch seat capacity with dynamic enrollment utilization.
+3. 7-day reschedule assistant with room-conflict filtering.
+4. Weekly workload analytics with busy vs free utilization.
+
+### API Endpoints
+
+All endpoints require `teacher` or `admin` auth session.
+
+1. `GET /api/time/availability?date=YYYY-MM-DD[&teacher_id=ID]`
+2. `GET /api/time/batch-capacity`
+3. `GET /api/time/reschedule-options?batch_id=ID&date=YYYY-MM-DD[&teacher_id=ID]`
+4. `GET /api/time/weekly-load?week_start=YYYY-MM-DD[&teacher_id=ID]`
+5. `POST /api/time/block`
+6. `DELETE /api/time/block/{id}[?teacher_id=ID]`
+
+Read endpoints are cached for 30 seconds. Cache is invalidated on:
+1. block create/delete
+2. schedule create/update/delete
+3. calendar override create/update/delete
+
+### Reschedule Logic
+
+For the target day + next 6 days:
+1. Resolve batch duration (`BatchSchedule` for weekday, otherwise `Batch.default_duration_minutes`).
+2. Compute teacher free slots from working window minus busy intervals:
+3. `ClassSession`
+4. `CalendarOverride`-adjusted schedule occurrences
+5. `TeacherUnavailability`
+6. Exclude room collisions (if batch has a room) using other batches sharing the same room.
+7. Return sorted options; mark earliest and lowest-load options.
+
+### Capacity Formula
+
+Computed dynamically from active `StudentBatchMap` records:
+1. `enrolled_students = count(distinct student_id where active=true)`
+2. `available_seats = max_students - enrolled_students` (or `null` when no max)
+3. `utilization_percentage = (enrolled_students / max_students) * 100` (or `0` when no max)

@@ -1,6 +1,7 @@
-﻿import React from 'react';
+import React from 'react';
 import { FiAlertTriangle, FiBell, FiCalendar, FiClock, FiPlus, FiRefreshCw, FiUsers, FiZap } from 'react-icons/fi';
 import { FaIndianRupeeSign } from 'react-icons/fa6';
+import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 
 import Modal from '../components/Modal.jsx';
@@ -11,17 +12,24 @@ import ErrorState from '../components/ui/ErrorState.jsx';
 import LoadingState from '../components/ui/LoadingState.jsx';
 import useRole from '../hooks/useRole';
 import {
-  createCalendarOverride,
-  deleteCalendarOverride,
-  fetchBatches,
-  fetchCalendarSession,
-  fetchTeacherCalendar,
-  fetchCalendarAnalytics,
-  openAttendanceSession,
-  syncCalendarHolidays,
-  updateCalendarOverride,
-  validateCalendarConflicts
-} from '../services/api';
+  createOverrideRequested,
+  loadAnalyticsRequested,
+  loadCalendarRequested,
+  loadSessionRequested,
+  loadSessionSucceeded,
+  openAttendanceRequested,
+  patchEventByUid,
+  setAnchorDate as setCalendarAnchorDate,
+  setCalendarError,
+  setFilters as setCalendarFilters,
+  setHeatmapEnabled as setCalendarHeatmapEnabled,
+  setTeacherId as setCalendarTeacherId,
+  setView as setCalendarView,
+  updateOverrideRequested,
+  deleteOverrideRequested,
+  validateConflictsRequested,
+} from '../store/slices/teacherCalendarSlice.js';
+
 import '../styles/teacher-calendar.css';
 
 const HALF_HOUR_SLOTS = Array.from({ length: 48 }, (_, idx) => {
@@ -30,13 +38,6 @@ const HALF_HOUR_SLOTS = Array.from({ length: 48 }, (_, idx) => {
   const minute = String(minutes % 60).padStart(2, '0');
   return `${hour}:${minute}`;
 });
-
-const DEFAULT_PREFS = {
-  snap_interval: 30,
-  work_day_start: '07:00',
-  work_day_end: '20:00',
-  default_view: 'week'
-};
 
 function startOfWeek(sourceDate) {
   const dt = new Date(sourceDate);
@@ -178,53 +179,15 @@ function getEventStatusUi(status) {
   return { label: 'Upcoming', className: 'status-upcoming' };
 }
 
-function parsePreferences(raw) {
-  if (!raw) return DEFAULT_PREFS;
-  try {
-    if (typeof raw === 'string') return { ...DEFAULT_PREFS, ...JSON.parse(raw) };
-    return { ...DEFAULT_PREFS, ...raw };
-  } catch {
-    return DEFAULT_PREFS;
-  }
-}
-
-function buildEvents(items) {
+function deriveStatusFromRange(startIso, endIso) {
   const now = new Date();
-  const todayKey = formatDateLocal(now);
-
-  return items.map((item) => {
-    const uid = item.session_id ? `session-${item.session_id}` : `batch-${item.batch_id}-${item.start_datetime}`;
-    const startMinutes = minutesSinceMidnight(item.start_datetime);
-    const startDt = parseCalendarDateTime(item.start_datetime);
-    const endDt = parseCalendarDateTime(item.end_datetime);
-    const serverStatus = item.status || 'upcoming';
-    const normalizedStatus = serverStatus === 'cancelled'
-      ? 'cancelled'
-      : (startDt <= now && endDt >= now ? 'live' : (endDt < now ? 'completed' : 'upcoming'));
-
-    let colorClass = 'calendar-tone-default';
-    const isCurrent = startDt <= now && endDt >= now;
-    const isPast = endDt < now;
-    const isUpcomingToday = formatDateLocal(startDt) === todayKey && startDt > now;
-    if (isCurrent) {
-      colorClass = 'calendar-tone-current';
-    } else if (isPast) {
-      colorClass = 'calendar-tone-past';
-    } else if (isUpcomingToday) {
-      colorClass = 'calendar-tone-today-upcoming';
-    }
-
-    return {
-      ...item,
-      status: normalizedStatus,
-      uid,
-      is_current: isCurrent,
-      start_minutes: startMinutes,
-      time_label: formatTimeRange(item.start_datetime, item.end_datetime),
-      color_class: colorClass
-    };
-  });
+  const start = parseCalendarDateTime(startIso);
+  const end = parseCalendarDateTime(endIso);
+  if (start <= now && end >= now) return 'live';
+  if (end < now) return 'completed';
+  return 'upcoming';
 }
+
 
 function groupEventsByDate(events) {
   return events.reduce((acc, item) => {
@@ -260,24 +223,31 @@ function snapMinutes(value, interval) {
 
 function TeacherCalendar() {
   const navigate = useNavigate();
+  const dispatch = useDispatch();
   const { isAdmin, loading: roleLoading } = useRole();
-  const [view, setView] = React.useState('week');
-  const [anchorDate, setAnchorDate] = React.useState(() => new Date());
-  const [teacherId, setTeacherId] = React.useState('');
-  const [filters, setFilters] = React.useState({ search: '', subject: '', academicLevel: '', room: '' });
-  const [items, setItems] = React.useState([]);
-  const [batchCatalog, setBatchCatalog] = React.useState([]);
-  const [holidays, setHolidays] = React.useState([]);
-  const [preferences, setPreferences] = React.useState(DEFAULT_PREFS);
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState('');
+  const {
+    view,
+    anchorDate: anchorDateValue,
+    teacherId,
+    filters,
+    items,
+    batchCatalog,
+    holidays,
+    preferences,
+    loading,
+    error,
+    heatmapEnabled,
+    analyticsByDay,
+    selectedSession,
+  } = useSelector((state) => state.teacherCalendar || {});
+  const anchorDate = React.useMemo(() => {
+    const parsed = new Date(anchorDateValue || toToday());
+    return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  }, [anchorDateValue]);
   const [viewportWidth, setViewportWidth] = React.useState(() => window.innerWidth);
   const initialViewApplied = React.useRef(false);
-  const [heatmapEnabled, setHeatmapEnabled] = React.useState(false);
-  const [analyticsByDay, setAnalyticsByDay] = React.useState({});
 
   const [selectedEvent, setSelectedEvent] = React.useState(null);
-  const [selectedSession, setSelectedSession] = React.useState(null);
 
   const [editorOpen, setEditorOpen] = React.useState(false);
   const [editorMode, setEditorMode] = React.useState('create');
@@ -291,13 +261,23 @@ function TeacherCalendar() {
     reason: ''
   });
   const [conflictState, setConflictState] = React.useState({ checking: false, message: '', conflicts: [] });
+  const batchOptions = React.useMemo(() => {
+    const seen = new Set();
+    const options = [];
+    for (const row of (batchCatalog || [])) {
+      const id = Number(row?.id || 0);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      options.push({ id, name: String(row?.name || `Batch ${id}`) });
+    }
+    return options.sort((a, b) => a.name.localeCompare(b.name));
+  }, [batchCatalog]);
 
   const slotHeight = 30;
   const gridScrollRef = React.useRef(null);
   const monthTodayRef = React.useRef(null);
   const dragSnapshot = React.useRef(null);
   const conflictTimer = React.useRef(null);
-  const holidaySyncDoneRef = React.useRef(false);
 
   React.useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
@@ -346,56 +326,28 @@ function TeacherCalendar() {
     return 'Agenda';
   }, [anchorDate, anchorDateLabel, dateRange.end, dateRange.start, todayKey, view]);
 
-  const loadCalendar = React.useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      if (!holidaySyncDoneRef.current) {
-        try {
-          await syncCalendarHolidays({
-            startYear: new Date().getFullYear(),
-            years: 5,
-            countryCode: 'IN',
-          });
-        } catch {
-          // Keep calendar usable even if holiday sync endpoint/API is temporarily unavailable.
-        } finally {
-          holidaySyncDoneRef.current = true;
-        }
-      }
-
-      const [data, batchesPayload] = await Promise.all([
-        fetchTeacherCalendar({
-          start: formatDateLocal(dateRange.start),
-          end: formatDateLocal(dateRange.end),
-          view,
-          teacherId: isAdmin ? teacherId : undefined,
-          bypassCache: true,
-        }),
-        fetchBatches().catch(() => []),
-      ]);
-      setPreferences(parsePreferences(data.preferences));
-      setItems(buildEvents(data.items || []));
-      setHolidays(Array.isArray(data.holidays) ? data.holidays : []);
-      setBatchCatalog(Array.isArray(batchesPayload) ? batchesPayload : []);
-    } catch (err) {
-      const message = err?.response?.data?.detail || err?.message || 'Failed to load calendar.';
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
-  }, [dateRange.start, dateRange.end, isAdmin, teacherId, view]);
+  const loadCalendar = React.useCallback(({ force = false, silent = false } = {}) => {
+    dispatch(loadCalendarRequested({
+      force,
+      silent,
+      start: formatDateLocal(dateRange.start),
+      end: formatDateLocal(dateRange.end),
+      view,
+      teacherId,
+      isAdmin,
+    }));
+  }, [dateRange.end, dateRange.start, dispatch, isAdmin, teacherId, view]);
 
   React.useEffect(() => {
     if (roleLoading) return;
-    loadCalendar().catch(() => null);
+    loadCalendar();
   }, [loadCalendar, roleLoading]);
 
   React.useEffect(() => {
     if (roleLoading) return undefined;
     const intervalId = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      loadCalendar().catch(() => null);
+      loadCalendar();
     }, 60000);
     return () => window.clearInterval(intervalId);
   }, [loadCalendar, roleLoading]);
@@ -403,37 +355,21 @@ function TeacherCalendar() {
   React.useEffect(() => {
     if (initialViewApplied.current) return;
     if (preferences?.default_view && view === 'week') {
-      setView(preferences.default_view);
+      dispatch(setCalendarView(preferences.default_view));
       initialViewApplied.current = true;
     }
-  }, [preferences, view]);
+  }, [dispatch, preferences, view]);
 
   React.useEffect(() => {
     const shouldFetch = heatmapEnabled || view === 'month';
     if (!shouldFetch) return;
-    let isActive = true;
-    const loadAnalytics = async () => {
-      try {
-        const data = await fetchCalendarAnalytics({
-          start: formatDateLocal(dateRange.start),
-          end: formatDateLocal(dateRange.end),
-          teacherId: isAdmin ? teacherId : undefined
-        });
-        if (!isActive) return;
-        const map = {};
-        (data.days || []).forEach((row) => {
-          map[row.date] = row;
-        });
-        setAnalyticsByDay(map);
-      } catch {
-        if (isActive) setAnalyticsByDay({});
-      }
-    };
-    loadAnalytics();
-    return () => {
-      isActive = false;
-    };
-  }, [dateRange.start, dateRange.end, heatmapEnabled, isAdmin, teacherId, view]);
+    dispatch(loadAnalyticsRequested({
+      start: formatDateLocal(dateRange.start),
+      end: formatDateLocal(dateRange.end),
+      teacherId,
+      isAdmin,
+    }));
+  }, [dateRange.end, dateRange.start, dispatch, heatmapEnabled, isAdmin, teacherId, view]);
 
   const filteredEvents = React.useMemo(() => {
     return items.filter((item) => {
@@ -532,14 +468,31 @@ function TeacherCalendar() {
       try {
         if (view === 'day' || view === 'week') {
           const container = gridScrollRef.current;
-          if (!container || container.clientHeight <= 0 || container.scrollHeight <= container.clientHeight + 4) {
+          if (!container || container.clientHeight <= 0 || container.clientWidth <= 0) {
             scheduleRetry();
             return;
           }
-          const target = Math.max(0, currentTimeLine - (container.clientHeight * 0.35));
-          container.scrollTop = target;
+          const canScrollY = container.scrollHeight > container.clientHeight + 4;
+          const targetTop = Math.max(0, currentTimeLine - (container.clientHeight * 0.35));
+          let nextLeft = container.scrollLeft;
+          if (view === 'week') {
+            const todayIndex = weekdays.findIndex((dt) => formatDateLocal(dt) === todayKey);
+            if (todayIndex >= 0) {
+              const todayColumnCenter = timeColWidth + (todayIndex * dayWidth) + (dayWidth / 2);
+              const targetLeft = todayColumnCenter - (container.clientWidth / 2);
+              const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+              nextLeft = Math.max(0, Math.min(maxLeft, targetLeft));
+            }
+          }
+          if (canScrollY) container.scrollTop = targetTop;
           if (typeof container.scrollTo === 'function') {
-            container.scrollTo({ top: target, behavior: 'smooth' });
+            container.scrollTo({
+              top: canScrollY ? targetTop : container.scrollTop,
+              left: nextLeft,
+              behavior: 'smooth',
+            });
+          } else {
+            container.scrollLeft = nextLeft;
           }
         } else if (view === 'month') {
           if (!monthTodayRef.current?.scrollIntoView) {
@@ -556,8 +509,19 @@ function TeacherCalendar() {
         // Fallback for browsers with partial scroll API support
         const container = gridScrollRef.current;
         if (container && (view === 'day' || view === 'week')) {
-          const target = Math.max(0, currentTimeLine - (container.clientHeight * 0.35));
-          container.scrollTop = target;
+          const targetTop = Math.max(0, currentTimeLine - (container.clientHeight * 0.35));
+          if (container.scrollHeight > container.clientHeight + 4) {
+            container.scrollTop = targetTop;
+          }
+          if (view === 'week') {
+            const todayIndex = weekdays.findIndex((dt) => formatDateLocal(dt) === todayKey);
+            if (todayIndex >= 0) {
+              const todayColumnCenter = timeColWidth + (todayIndex * dayWidth) + (dayWidth / 2);
+              const targetLeft = todayColumnCenter - (container.clientWidth / 2);
+              const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+              container.scrollLeft = Math.max(0, Math.min(maxLeft, targetLeft));
+            }
+          }
         } else {
           scheduleRetry();
         }
@@ -570,24 +534,72 @@ function TeacherCalendar() {
       if (timeoutId) window.clearTimeout(timeoutId);
       window.cancelAnimationFrame(rafId);
     };
-  }, [anchorDateLabel, currentTimeLine, loading, roleLoading, view]);
+  }, [anchorDateLabel, currentTimeLine, dayWidth, loading, roleLoading, timeColWidth, todayKey, view, weekdays]);
 
-  const openEvent = React.useCallback(async (event) => {
+  const openEvent = React.useCallback((event) => {
     setSelectedEvent(event);
-    setSelectedSession(null);
-    if (!event.session_id) return;
-    try {
-      const details = await fetchCalendarSession(event.session_id);
-      setSelectedSession(details);
-    } catch {
-      setSelectedSession(null);
+    if (!event.session_id) {
+      dispatch(loadSessionSucceeded(null));
+      return;
     }
-  }, []);
+    dispatch(loadSessionRequested({ sessionId: event.session_id }));
+  }, [dispatch]);
 
   const closeEventModal = React.useCallback(() => {
     setSelectedEvent(null);
-    setSelectedSession(null);
-  }, []);
+    dispatch(loadSessionSucceeded(null));
+  }, [dispatch]);
+
+  const requestOpenAttendance = React.useCallback((body) => (
+    new Promise((resolve, reject) => {
+      dispatch(openAttendanceRequested({
+        body,
+        onSuccess: (payload) => resolve(payload || {}),
+        onError: (message) => reject(new Error(message || 'Failed to open attendance')),
+      }));
+    })
+  ), [dispatch]);
+
+  const requestValidateConflicts = React.useCallback((body) => (
+    new Promise((resolve, reject) => {
+      dispatch(validateConflictsRequested({
+        body,
+        onSuccess: (payload) => resolve(payload || {}),
+        onError: (message) => reject(new Error(message || 'Conflict validation failed')),
+      }));
+    })
+  ), [dispatch]);
+
+  const requestCreateOverride = React.useCallback((body) => (
+    new Promise((resolve, reject) => {
+      dispatch(createOverrideRequested({
+        body,
+        onSuccess: (payload) => resolve(payload || {}),
+        onError: (message) => reject(new Error(message || 'Failed to save override')),
+      }));
+    })
+  ), [dispatch]);
+
+  const requestUpdateOverride = React.useCallback((overrideIdValue, body) => (
+    new Promise((resolve, reject) => {
+      dispatch(updateOverrideRequested({
+        overrideId: overrideIdValue,
+        body,
+        onSuccess: (payload) => resolve(payload || {}),
+        onError: (message) => reject(new Error(message || 'Failed to save override')),
+      }));
+    })
+  ), [dispatch]);
+
+  const requestDeleteOverride = React.useCallback((overrideIdValue) => (
+    new Promise((resolve, reject) => {
+      dispatch(deleteOverrideRequested({
+        overrideId: overrideIdValue,
+        onSuccess: () => resolve(true),
+        onError: (message) => reject(new Error(message || 'Failed to delete override')),
+      }));
+    })
+  ), [dispatch]);
 
   const handleOpenAttendance = React.useCallback(async () => {
     if (!selectedEvent) return;
@@ -605,7 +617,7 @@ function TeacherCalendar() {
         navigate('/attendance');
         return;
       }
-      const payload = await openAttendanceSession({
+      const payload = await requestOpenAttendance({
         batch_id: Number(selectedEvent.batch_id),
         schedule_id: null,
         attendance_date: attendanceDate
@@ -613,9 +625,9 @@ function TeacherCalendar() {
       const nextId = String(payload?.session_id || '');
       navigate(nextId ? `/attendance?session_id=${encodeURIComponent(nextId)}${contextSuffix}` : `/attendance?${contextQuery}`);
     } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Failed to open attendance');
+      dispatch(setCalendarError(err?.response?.data?.detail || err?.message || 'Failed to open attendance'));
     }
-  }, [navigate, selectedEvent]);
+  }, [dispatch, navigate, requestOpenAttendance, selectedEvent]);
 
   const handleViewBatch = React.useCallback(() => {
     if (!selectedEvent?.batch_id) {
@@ -640,16 +652,16 @@ function TeacherCalendar() {
         reason: 'Cancelled from calendar modal'
       };
       if (selectedEvent.override_id) {
-        await updateCalendarOverride(Number(selectedEvent.override_id), payload);
+        await requestUpdateOverride(Number(selectedEvent.override_id), payload);
       } else {
-        await createCalendarOverride(payload);
+        await requestCreateOverride(payload);
       }
       closeEventModal();
-      await loadCalendar();
+      loadCalendar({ force: true });
     } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Failed to cancel class');
+      dispatch(setCalendarError(err?.response?.data?.detail || err?.message || 'Failed to cancel class'));
     }
-  }, [closeEventModal, loadCalendar, selectedEvent]);
+  }, [closeEventModal, dispatch, loadCalendar, requestCreateOverride, requestUpdateOverride, selectedEvent]);
 
   const handleSendReminder = React.useCallback(() => {
     if (!selectedEvent?.batch_id) {
@@ -669,13 +681,15 @@ function TeacherCalendar() {
   const startAddClass = React.useCallback(() => {
     setEditorMode('create');
     setOverrideId(null);
+    const defaultBatchId = String(batchOptions[0]?.id || '');
     setEditorForm((prev) => ({
       ...prev,
+      batch_id: defaultBatchId,
       override_date: formatDateLocal(dateRange.start)
     }));
     setConflictState({ checking: false, message: '', conflicts: [] });
     setEditorOpen(true);
-  }, [dateRange.start]);
+  }, [batchOptions, dateRange.start]);
 
   const startEditFromSelection = React.useCallback(() => {
     if (!selectedEvent) return;
@@ -697,7 +711,7 @@ function TeacherCalendar() {
   const runConflictCheck = React.useCallback(async ({ teacherValue, dateValue, startTime, duration, roomId }) => {
     setConflictState({ checking: true, message: '', conflicts: [] });
     try {
-      const result = await validateCalendarConflicts({
+      const result = await requestValidateConflicts({
         teacher_id: teacherValue,
         date: dateValue,
         start_time: startTime,
@@ -716,7 +730,7 @@ function TeacherCalendar() {
       setConflictState({ checking: false, message, conflicts: [] });
       return { ok: false, conflicts: [], message };
     }
-  }, []);
+  }, [requestValidateConflicts]);
 
   const validateConflict = React.useCallback(async ({ teacherValue, dateValue, startTime, duration, roomId }) => {
     if (conflictTimer.current) {
@@ -728,8 +742,8 @@ function TeacherCalendar() {
   }, [runConflictCheck]);
 
   const applyOptimisticUpdate = React.useCallback((eventId, updates) => {
-    setItems((prev) => prev.map((item) => (item.uid === eventId ? { ...item, ...updates } : item)));
-  }, []);
+    dispatch(patchEventByUid({ uid: eventId, updates }));
+  }, [dispatch]);
 
   const handleEventDrop = React.useCallback(async (dragEvent) => {
     const activeEvent = dragEvent.active?.data?.current?.event;
@@ -768,7 +782,7 @@ function TeacherCalendar() {
     });
 
     try {
-      await createCalendarOverride({
+      await requestCreateOverride({
         batch_id: activeEvent.batch_id,
         override_date: formatDateLocal(newStart),
         new_start_time: newStart.toTimeString().slice(0, 5),
@@ -779,9 +793,9 @@ function TeacherCalendar() {
       if (dragSnapshot.current) {
         applyOptimisticUpdate(activeEvent.uid, dragSnapshot.current);
       }
-      setError(err?.response?.data?.detail || 'Failed to save reschedule');
+      dispatch(setCalendarError(err?.response?.data?.detail || 'Failed to save reschedule'));
     }
-  }, [applyOptimisticUpdate, isAdmin, preferences.snap_interval, runConflictCheck, slotHeight, teacherId]);
+  }, [applyOptimisticUpdate, dispatch, isAdmin, preferences.snap_interval, requestCreateOverride, runConflictCheck, slotHeight, teacherId]);
 
   const handleDragPreview = React.useCallback((dragEvent) => {
     const activeEvent = dragEvent.active?.data?.current?.event;
@@ -846,7 +860,7 @@ function TeacherCalendar() {
         return;
       }
       try {
-        await createCalendarOverride({
+        await requestCreateOverride({
           batch_id: event.batch_id,
           override_date: event.start_datetime.slice(0, 10),
           new_start_time: event.start_datetime.slice(11, 16),
@@ -855,17 +869,22 @@ function TeacherCalendar() {
         });
       } catch (err) {
         applyOptimisticUpdate(event.uid, { duration_minutes: originalDuration });
-        setError(err?.response?.data?.detail || 'Failed to save resize');
+        dispatch(setCalendarError(err?.response?.data?.detail || 'Failed to save resize'));
       }
     };
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
-  }, [applyOptimisticUpdate, isAdmin, preferences.snap_interval, runConflictCheck, slotHeight, teacherId, validateConflict]);
+  }, [applyOptimisticUpdate, dispatch, isAdmin, preferences.snap_interval, requestCreateOverride, runConflictCheck, slotHeight, teacherId, validateConflict]);
 
   const saveOverride = React.useCallback(async () => {
+    const batchId = Number(editorForm.batch_id || 0);
+    if (!batchId) {
+      setConflictState((prev) => ({ ...prev, message: 'Please select a valid batch.' }));
+      return;
+    }
     const formPayload = {
-      batch_id: Number(editorForm.batch_id),
+      batch_id: batchId,
       override_date: editorForm.override_date,
       new_start_time: editorForm.new_start_time || null,
       new_duration_minutes: Number(editorForm.new_duration_minutes) || null,
@@ -874,30 +893,51 @@ function TeacherCalendar() {
     };
     try {
       if (editorMode === 'update' && overrideId) {
-        await updateCalendarOverride(overrideId, formPayload);
+        await requestUpdateOverride(overrideId, formPayload);
       } else {
-        await createCalendarOverride(formPayload);
+        await requestCreateOverride(formPayload);
       }
       setEditorOpen(false);
-      await loadCalendar();
+      loadCalendar({ force: true });
     } catch (err) {
       setConflictState((prev) => ({
         ...prev,
         message: err?.response?.data?.detail || 'Failed to save override.'
       }));
     }
-  }, [editorForm, editorMode, loadCalendar, overrideId]);
+  }, [editorForm, editorMode, loadCalendar, overrideId, requestCreateOverride, requestUpdateOverride]);
 
   const removeOverride = React.useCallback(async () => {
     if (!overrideId) return;
     try {
-      await deleteCalendarOverride(overrideId);
+      await requestDeleteOverride(overrideId);
+      if (selectedEvent?.uid) {
+        const nextStatus = deriveStatusFromRange(selectedEvent.start_datetime, selectedEvent.end_datetime);
+        dispatch(patchEventByUid({
+          uid: selectedEvent.uid,
+          updates: {
+            status: nextStatus,
+            override_id: null,
+            cancelled: false,
+            reason: '',
+          },
+        }));
+        setSelectedEvent((prev) => (
+          prev ? {
+            ...prev,
+            status: nextStatus,
+            override_id: null,
+            cancelled: false,
+            reason: '',
+          } : prev
+        ));
+      }
       setEditorOpen(false);
-      await loadCalendar();
+      loadCalendar({ force: true, silent: true });
     } catch (err) {
       setConflictState((prev) => ({ ...prev, message: err?.response?.data?.detail || 'Failed to delete override.' }));
     }
-  }, [loadCalendar, overrideId]);
+  }, [dispatch, loadCalendar, overrideId, requestDeleteOverride, selectedEvent]);
 
   const liveEvent = preferences?.enable_live_mode_auto_open === false
     ? null
@@ -1023,28 +1063,28 @@ function TeacherCalendar() {
           if (!value) return;
           const next = new Date(value);
           if (Number.isNaN(next.getTime())) return;
-          setAnchorDate(next);
+          dispatch(setCalendarAnchorDate(formatDateLocal(next)));
         }}
         view={view}
-        onViewChange={setView}
-        onPrev={() => setAnchorDate((prev) => nextAnchor(prev, view, -1))}
-        onNext={() => setAnchorDate((prev) => nextAnchor(prev, view, 1))}
-        onToday={() => setAnchorDate(new Date())}
+        onViewChange={(nextView) => dispatch(setCalendarView(nextView))}
+        onPrev={() => dispatch(setCalendarAnchorDate(formatDateLocal(nextAnchor(anchorDate, view, -1))))}
+        onNext={() => dispatch(setCalendarAnchorDate(formatDateLocal(nextAnchor(anchorDate, view, 1))))}
+        onToday={() => dispatch(setCalendarAnchorDate(toToday()))}
         filters={filters}
-        onFiltersChange={setFilters}
+        onFiltersChange={(nextFilters) => dispatch(setCalendarFilters(nextFilters))}
         filterOptions={filterOptions}
         isAdmin={isAdmin}
         teacherId={teacherId}
-        onTeacherIdChange={setTeacherId}
+        onTeacherIdChange={(value) => dispatch(setCalendarTeacherId(value))}
         heatmapEnabled={heatmapEnabled}
-        onHeatmapToggle={setHeatmapEnabled}
+        onHeatmapToggle={(value) => dispatch(setCalendarHeatmapEnabled(value))}
       />
 
       <ErrorState message={error} />
 
       <div className="calendar-content-shell">
         <div className="calendar-content-topbar">
-          <button type="button" className="calendar-refresh-btn" onClick={() => loadCalendar().catch(() => null)}>
+          <button type="button" className="calendar-refresh-btn" onClick={() => loadCalendar({ force: true })}>
             <FiRefreshCw /> Refresh
           </button>
           <div className="calendar-period-pill" aria-live="polite">
@@ -1056,7 +1096,7 @@ function TeacherCalendar() {
       </div>
 
       <button type="button" className="calendar-fab" onClick={startAddClass}>
-        <FiPlus /> Add Class
+        <FiPlus /> Add Override
       </button>
 
       <LiveClassPanel
@@ -1125,21 +1165,40 @@ function TeacherCalendar() {
 
       <Modal
         open={editorOpen}
-        title={editorMode === 'update' ? 'Edit Schedule Override' : 'Add Class / Override'}
+        title={editorMode === 'update' ? 'Edit Date Override' : 'Create Date Override'}
         onClose={() => setEditorOpen(false)}
+        panelClassName="calendar-override-modal-panel"
+        bodyClassName="calendar-override-modal-body"
+        footerClassName="calendar-override-modal-footer"
         footer={(
           <div className="calendar-editor-footer">
             {editorMode === 'update' && overrideId ? (
               <button type="button" className="calendar-action-btn danger" onClick={removeOverride}>Delete Override</button>
             ) : null}
-            <button type="button" className="calendar-action-btn" onClick={saveOverride}>Save</button>
+            <div className="calendar-editor-footer-actions">
+              <button type="button" className="calendar-action-btn calendar-filter-cancel-btn" onClick={() => setEditorOpen(false)}>Cancel</button>
+              <button type="button" className="calendar-action-btn calendar-filter-apply-btn" onClick={saveOverride}>Save Override</button>
+            </div>
           </div>
         )}
       >
+        <p className="calendar-editor-intro">
+          Use an override to change one class date only. Regular weekly schedule remains unchanged.
+        </p>
         <div className="calendar-editor-grid">
           <label>
-            Batch ID
-            <input value={editorForm.batch_id} onChange={(event) => setEditorForm((prev) => ({ ...prev, batch_id: event.target.value }))} />
+            Batch
+            <select
+              value={editorForm.batch_id}
+              onChange={(event) => setEditorForm((prev) => ({ ...prev, batch_id: event.target.value }))}
+            >
+              <option value="">Select batch</option>
+              {batchOptions.map((option) => (
+                <option key={option.id} value={String(option.id)}>
+                  {option.name}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
             Date
@@ -1159,9 +1218,14 @@ function TeacherCalendar() {
               onChange={(event) => setEditorForm((prev) => ({ ...prev, new_duration_minutes: Number(event.target.value) }))}
             />
           </label>
-          <label>
+          <label className="calendar-editor-field-full">
             Reason
-            <input value={editorForm.reason} onChange={(event) => setEditorForm((prev) => ({ ...prev, reason: event.target.value }))} />
+            <textarea
+              rows={2}
+              placeholder="Why is this class being moved?"
+              value={editorForm.reason}
+              onChange={(event) => setEditorForm((prev) => ({ ...prev, reason: event.target.value }))}
+            />
           </label>
         </div>
         {conflictState.checking ? <p className="calendar-conflict-info">Validating overlap...</p> : null}
@@ -1172,4 +1236,3 @@ function TeacherCalendar() {
 }
 
 export default TeacherCalendar;
-

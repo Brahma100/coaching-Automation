@@ -7,8 +7,67 @@ const api = axios.create({
 });
 const BACKEND = '/backend';
 const TOAST_DURATION_MS_KEY = 'coaching-toast-duration-ms';
+const DATA_SYNC_STORAGE_KEY = 'coaching:data-sync';
+const DATA_SYNC_EVENT_NAME = 'coaching:data-sync';
 
 let apiErrorNotifier = null;
+
+function uniqueSyncId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function publishDataSync(domains = [], meta = {}) {
+  if (typeof window === 'undefined') return;
+  const safeDomains = Array.isArray(domains)
+    ? [...new Set(domains.map((value) => String(value || '').trim()).filter(Boolean))]
+    : [];
+  if (!safeDomains.length) return;
+  const payload = {
+    id: uniqueSyncId(),
+    ts: Date.now(),
+    domains: safeDomains,
+    ...meta,
+  };
+  try {
+    window.dispatchEvent(new CustomEvent(DATA_SYNC_EVENT_NAME, { detail: payload }));
+  } catch {
+    // no-op
+  }
+  try {
+    window.localStorage.setItem(DATA_SYNC_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // no-op
+  }
+}
+
+export function subscribeDataSync(handler) {
+  if (typeof window === 'undefined' || typeof handler !== 'function') return () => {};
+  let lastSeenId = '';
+  const consume = (payload) => {
+    if (!payload || typeof payload !== 'object') return;
+    if (payload.id && payload.id === lastSeenId) return;
+    lastSeenId = payload.id || lastSeenId;
+    handler(payload);
+  };
+  const onCustomEvent = (event) => {
+    consume(event?.detail);
+  };
+  const onStorage = (event) => {
+    if (event.key !== DATA_SYNC_STORAGE_KEY || !event.newValue) return;
+    try {
+      const payload = JSON.parse(event.newValue);
+      consume(payload);
+    } catch {
+      // no-op
+    }
+  };
+  window.addEventListener(DATA_SYNC_EVENT_NAME, onCustomEvent);
+  window.addEventListener('storage', onStorage);
+  return () => {
+    window.removeEventListener(DATA_SYNC_EVENT_NAME, onCustomEvent);
+    window.removeEventListener('storage', onStorage);
+  };
+}
 
 function getDefaultToastDurationMs() {
   try {
@@ -121,6 +180,70 @@ export async function logout() {
   await api.post(`${BACKEND}/auth/logout`);
 }
 
+export async function onboardCheckSlug(slug, setupToken = '') {
+  const params = new URLSearchParams();
+  params.set('slug', String(slug || ''));
+  const { data } = await api.get(`${BACKEND}/api/onboard/check-slug?${params.toString()}`);
+  return data;
+}
+
+export async function onboardCreateCenter(payload) {
+  const { data } = await api.post(`${BACKEND}/api/onboard/center`, payload);
+  return data;
+}
+
+export async function onboardFetchState(setupToken) {
+  const params = new URLSearchParams();
+  params.set('setup_token', String(setupToken || ''));
+  const { data } = await api.get(`${BACKEND}/api/onboard/state?${params.toString()}`);
+  return data;
+}
+
+export async function onboardReserveSlug(payload) {
+  const { data } = await api.post(`${BACKEND}/api/onboard/reserve-slug`, payload);
+  return data;
+}
+
+export async function onboardCreateAdmin(payload) {
+  const { data } = await api.post(`${BACKEND}/api/onboard/admin`, payload);
+  return data;
+}
+
+export async function onboardAcademicSetup(payload) {
+  const { data } = await api.post(`${BACKEND}/api/onboard/academic-setup`, payload);
+  return data;
+}
+
+export async function onboardInviteTeachers(payload) {
+  const { data } = await api.post(`${BACKEND}/api/onboard/teachers`, payload);
+  return data;
+}
+
+export async function onboardImportStudents(payload) {
+  const body = new FormData();
+  body.set('setup_token', String(payload?.setup_token || ''));
+  if (payload?.file) body.set('file', payload.file);
+  const { data } = await api.post(`${BACKEND}/api/onboard/students/import`, body, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return data;
+}
+
+export async function onboardFinish(payload) {
+  const { data } = await api.post(`${BACKEND}/api/onboard/finish`, payload);
+  return data;
+}
+
+export async function fetchActivationStatus() {
+  const { data } = await api.get(`${BACKEND}/api/activation/status`);
+  return data;
+}
+
+export async function completeActivation() {
+  const { data } = await api.post(`${BACKEND}/api/activation/complete`);
+  return data;
+}
+
 export async function fetchTodayBrief() {
   const { data } = await api.get(`${BACKEND}/api/teacher/brief/today`);
   return data;
@@ -133,6 +256,76 @@ export async function fetchTeacherProfile() {
 
 export async function updateTeacherProfile(payload) {
   const { data } = await api.put(`${BACKEND}/api/teacher/profile`, payload);
+  return data;
+}
+
+export async function fetchTelegramLinkStatus() {
+  const { data } = await api.get(`${BACKEND}/api/telegram/link/status`);
+  return data;
+}
+
+export async function startTelegramLink(ttlSeconds = 600) {
+  const { data } = await api.post(`${BACKEND}/api/telegram/link/start`, { ttl_seconds: ttlSeconds });
+  return data;
+}
+
+export async function fetchTeacherCommunicationSettings() {
+  const { data } = await api.get(`${BACKEND}/api/teacher/communication-settings`);
+  return data;
+}
+
+export async function fetchIntegrations() {
+  const { data } = await api.get(`${BACKEND}/api/integrations`);
+  return data;
+}
+
+export async function connectIntegration(provider, configJson = {}) {
+  const { data } = await api.post(`${BACKEND}/api/integrations/${encodeURIComponent(String(provider || ''))}/connect`, {
+    config_json: configJson,
+  });
+  return data;
+}
+
+export async function disconnectIntegration(provider) {
+  const { data } = await api.post(`${BACKEND}/api/integrations/${encodeURIComponent(String(provider || ''))}/disconnect`, {});
+  return data;
+}
+
+export async function updateTeacherCommunicationSettings(payload) {
+  const { data } = await api.put(`${BACKEND}/api/teacher/communication-settings`, payload);
+  return data;
+}
+
+export async function fetchTeacherCommunicationHealth() {
+  const { data } = await api.get(`${BACKEND}/api/teacher/communication-settings/health`);
+  return data;
+}
+
+export async function sendTeacherCommunicationTestMessage(message = 'Test message from Communication settings') {
+  const { data } = await api.post(`${BACKEND}/api/teacher/communication-settings/test-message`, { message });
+  return data;
+}
+
+export async function fetchTeacherAutomationRules() {
+  const { data } = await api.get(`${BACKEND}/api/teacher/automation-rules`);
+  return data;
+}
+
+export async function updateTeacherAutomationRules(payload) {
+  const { data } = await api.put(`${BACKEND}/api/teacher/automation-rules`, payload);
+  return data;
+}
+
+export async function fetchRuleConfigEffective(batchId = null) {
+  const params = new URLSearchParams();
+  if (batchId !== null && batchId !== undefined) params.set('batch_id', String(batchId));
+  const query = params.toString();
+  const { data } = await api.get(`${BACKEND}/rules/effective${query ? `?${query}` : ''}`);
+  return data;
+}
+
+export async function upsertRuleConfig(payload) {
+  const { data } = await api.post(`${BACKEND}/rules/upsert`, payload);
   return data;
 }
 
@@ -208,38 +401,49 @@ export async function fetchBatches() {
   return data;
 }
 
-export async function fetchAdminBatches() {
-  const { data } = await api.get(`${BACKEND}/api/batches`);
-  return data;
+export async function fetchAdminBatches({ forDate } = {}) {
+  const params = new URLSearchParams();
+  if (forDate) params.set('for_date', String(forDate));
+  const query = params.toString();
+  const { data } = await api.get(`${BACKEND}/api/batches${query ? `?${query}` : ''}`);
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.data)) return data.data;
+  return [];
 }
 
 export async function createBatch(payload) {
   const { data } = await api.post(`${BACKEND}/api/batches`, payload);
+  publishDataSync(['batches', 'calendar', 'time_capacity'], { action: 'create_batch' });
   return data;
 }
 
 export async function updateBatch(batchId, payload) {
   const { data } = await api.put(`${BACKEND}/api/batches/${batchId}`, payload);
+  publishDataSync(['batches', 'calendar', 'time_capacity'], { action: 'update_batch', batch_id: Number(batchId) || null });
   return data;
 }
 
 export async function deleteBatch(batchId) {
   const { data } = await api.delete(`${BACKEND}/api/batches/${batchId}`);
+  publishDataSync(['batches', 'calendar', 'time_capacity'], { action: 'delete_batch', batch_id: Number(batchId) || null });
   return data;
 }
 
 export async function addBatchSchedule(batchId, payload) {
   const { data } = await api.post(`${BACKEND}/api/batches/${batchId}/schedule`, payload);
+  publishDataSync(['batches', 'calendar', 'time_capacity'], { action: 'add_batch_schedule', batch_id: Number(batchId) || null });
   return data;
 }
 
 export async function updateBatchSchedule(scheduleId, payload) {
   const { data } = await api.put(`${BACKEND}/api/batch-schedules/${scheduleId}`, payload);
+  publishDataSync(['batches', 'calendar', 'time_capacity'], { action: 'update_batch_schedule', schedule_id: Number(scheduleId) || null });
   return data;
 }
 
 export async function deleteBatchSchedule(scheduleId) {
   const { data } = await api.delete(`${BACKEND}/api/batch-schedules/${scheduleId}`);
+  publishDataSync(['batches', 'calendar', 'time_capacity'], { action: 'delete_batch_schedule', schedule_id: Number(scheduleId) || null });
   return data;
 }
 
@@ -250,11 +454,13 @@ export async function fetchBatchStudents(batchId) {
 
 export async function linkStudentToBatch(batchId, studentId) {
   const { data } = await api.post(`${BACKEND}/api/batches/${batchId}/students`, { student_id: studentId });
+  publishDataSync(['batches', 'time_capacity'], { action: 'link_student_to_batch', batch_id: Number(batchId) || null, student_id: Number(studentId) || null });
   return data;
 }
 
 export async function unlinkStudentFromBatch(batchId, studentId) {
   const { data } = await api.delete(`${BACKEND}/api/batches/${batchId}/students/${studentId}`);
+  publishDataSync(['batches', 'time_capacity'], { action: 'unlink_student_from_batch', batch_id: Number(batchId) || null, student_id: Number(studentId) || null });
   return data;
 }
 
@@ -263,8 +469,11 @@ export async function fetchAttendanceByBatch(batchId) {
   return data;
 }
 
-export async function fetchAttendanceManageOptions(batchId) {
-  const query = batchId ? `?batch_id=${encodeURIComponent(batchId)}` : '';
+export async function fetchAttendanceManageOptions(batchId, attendanceDate) {
+  const params = new URLSearchParams();
+  if (batchId) params.set('batch_id', String(batchId));
+  if (attendanceDate) params.set('attendance_date', String(attendanceDate));
+  const query = params.toString() ? `?${params.toString()}` : '';
   const { data } = await api.get(`${BACKEND}/api/attendance/manage/options${query}`);
   return data;
 }
@@ -448,9 +657,20 @@ export async function fetchDashboardBundle() {
   return { brief, students, fees, homework, actions, risk, batches };
 }
 
-export async function fetchTodayView(teacherId) {
-  const query = teacherId ? `?teacher_id=${encodeURIComponent(teacherId)}` : '';
-  const { data } = await api.get(`${BACKEND}/api/dashboard/today${query}`);
+export async function fetchTodayView({ teacherId, bypassCache = false } = {}) {
+  const params = new URLSearchParams();
+  if (teacherId) params.set('teacher_id', String(teacherId));
+  if (bypassCache) params.set('bypass_cache', '1');
+  const query = params.toString();
+  const { data } = await api.get(`${BACKEND}/api/dashboard/today${query ? `?${query}` : ''}`);
+  return data;
+}
+
+export async function fetchOperationalBrain({ bypassCache = false } = {}) {
+  const params = new URLSearchParams();
+  if (bypassCache) params.set('bypass_cache', '1');
+  const query = params.toString();
+  const { data } = await api.get(`${BACKEND}/api/brain${query ? `?${query}` : ''}`);
   return data;
 }
 
@@ -491,22 +711,72 @@ export async function syncCalendarHolidays({ startYear, years = 5, countryCode =
 
 export async function createCalendarOverride(payload) {
   const { data } = await api.post(`${BACKEND}/api/calendar/override`, payload);
+  publishDataSync(['calendar', 'time_capacity'], { action: 'create_calendar_override', batch_id: Number(payload?.batch_id) || null });
   return data;
 }
 
 export async function updateCalendarOverride(overrideId, payload) {
   const { data } = await api.put(`${BACKEND}/api/calendar/override/${overrideId}`, payload);
+  publishDataSync(['calendar', 'time_capacity'], { action: 'update_calendar_override', override_id: Number(overrideId) || null });
   return data;
 }
 
 export async function deleteCalendarOverride(overrideId) {
   const { data } = await api.delete(`${BACKEND}/api/calendar/override/${overrideId}`);
+  publishDataSync(['calendar', 'time_capacity'], { action: 'delete_calendar_override', override_id: Number(overrideId) || null });
   return data;
 }
 
 export async function validateCalendarConflicts(payload) {
   const { data } = await api.post(`${BACKEND}/api/calendar/conflicts/validate`, payload);
   return data;
+}
+
+export async function fetchTimeAvailability({ date, teacherId } = {}) {
+  const params = new URLSearchParams();
+  params.set('date', String(date || ''));
+  if (teacherId) params.set('teacher_id', String(teacherId));
+  const { data } = await api.get(`${BACKEND}/api/time/availability?${params.toString()}`);
+  return data?.data || {};
+}
+
+export async function fetchBatchCapacity() {
+  const { data } = await api.get(`${BACKEND}/api/time/batch-capacity`);
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.data)) return data.data;
+  return [];
+}
+
+export async function fetchRescheduleOptions({ batchId, date, teacherId } = {}) {
+  const params = new URLSearchParams();
+  params.set('batch_id', String(batchId || ''));
+  params.set('date', String(date || ''));
+  if (teacherId) params.set('teacher_id', String(teacherId));
+  const { data } = await api.get(`${BACKEND}/api/time/reschedule-options?${params.toString()}`);
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.data)) return data.data;
+  return [];
+}
+
+export async function fetchWeeklyLoad({ weekStart, teacherId } = {}) {
+  const params = new URLSearchParams();
+  params.set('week_start', String(weekStart || ''));
+  if (teacherId) params.set('teacher_id', String(teacherId));
+  const { data } = await api.get(`${BACKEND}/api/time/weekly-load?${params.toString()}`);
+  return data?.data || {};
+}
+
+export async function createTimeBlock(payload) {
+  const { data } = await api.post(`${BACKEND}/api/time/block`, payload);
+  publishDataSync(['time_capacity', 'calendar'], { action: 'create_time_block' });
+  return data?.data || {};
+}
+
+export async function deleteTimeBlock(blockId, teacherId) {
+  const query = teacherId ? `?teacher_id=${encodeURIComponent(teacherId)}` : '';
+  const { data } = await api.delete(`${BACKEND}/api/time/block/${blockId}${query}`);
+  publishDataSync(['time_capacity', 'calendar'], { action: 'delete_time_block', block_id: Number(blockId) || null });
+  return data?.data || { ok: false };
 }
 
 export default api;
